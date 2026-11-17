@@ -217,13 +217,8 @@ ift — drive infiniterm from a shell
   ift install-antigravity-hooks
                              wire infiniterm into ~/.gemini/config/hooks.json
                              (Antigravity CLI, `agy`)
-  ift install-extension <path|id|store-url>
-                             add an extension the browser cards load: an
-                             unpacked directory, or an id / Chrome Web
-                             Store url looked up in Chrome's own profile
-                             (CEF cannot pull a .crx from the store
-                             directly, so it must be installed there
-                             first); takes effect on the app's next launch
+  ift install-extension      no longer used: browser cards load no extensions
+                             (exit 2)
 
 Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage; for ift licence
 only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
@@ -302,7 +297,7 @@ fn main() -> ExitCode {
         Some("install-antigravity-hooks") => {
             install_antigravity(args.contains(&"--dry-run".to_string()))
         }
-        Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
+        Some("install-extension") => install_extension(),
         Some("install") => install_self(),
         Some("licence" | "license") => licence_cmd::run(&args[1..]),
         Some("update-key") => update_sign_cmd::key(&args[1..]),
@@ -642,7 +637,7 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
 }
 
 /// How long `ift terminal` waits for a launched app to open its socket:
-/// CEF and the canvas load take a few seconds on a cold start.
+/// The window and the canvas take a few seconds to load on a cold start.
 const LAUNCH_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// `ift terminal [flags] <dir>...`: resolves each path here, since the app's
@@ -1348,26 +1343,12 @@ fn install_pi(dir: Option<&str>, dry_run: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `ift install-extension <path|id|store-url>`: filesystem only, no socket,
-/// the same shape as `install-pi-hooks` — the browser picks a new one up
-/// on its own next launch, not this app's, so there is nothing to tell the
-/// running app about.
-fn install_extension(source: Option<&str>) -> ExitCode {
-    let Some(source) = source else {
-        eprintln!("ift: install-extension needs a path, an id, or a Chrome Web Store url");
-        return ExitCode::from(2);
-    };
-    match infiniterm_core::extensions::install(&infiniterm_core::paths::browser_dir(), source) {
-        Ok(dest) => {
-            println!("installed {}", dest.display());
-            println!("  takes effect on infiniterm's next launch");
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("ift: {e}");
-            ExitCode::from(2)
-        }
-    }
+/// `ift install-extension`: the name stays so a script that calls it gets a
+/// plain answer instead of "unknown command". Browser cards use the system's
+/// web view since #826 and load no extensions, so there is nothing to install.
+fn install_extension() -> ExitCode {
+    eprintln!("ift: browser cards no longer load extensions (they use the system web view)");
+    ExitCode::from(2)
 }
 
 #[cfg(test)]

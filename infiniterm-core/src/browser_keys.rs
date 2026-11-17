@@ -5,9 +5,9 @@
 //! chords, which would otherwise zoom the canvas around a page that does
 //! not follow, zoom the PAGE instead: what the same keys do in Safari. The
 //! app consults this before the keymap when the focused card is a browser.
-//! In the port the page is a CEF texture that does scale with the canvas,
-//! but the page zoom is still the thing a person means by Cmd+= over a
-//! browser, so the rule stays.
+//! In the port the page scales with the canvas anyway, but the page zoom is
+//! still the thing a person means by Cmd+= over a browser, so the rule
+//! stays.
 const OVERRIDES: [(&str, &str); 7] = [
     ("cmd+=", "browser.zoom.in"),
     ("cmd+-", "browser.zoom.out"),

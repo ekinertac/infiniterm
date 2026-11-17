@@ -55,8 +55,8 @@ drive_start() {
     # If something else is still in front, Ekin is using the Mac and every
     # key below would land in his window (a Cmd+Shift+P once opened Page
     # Setup in iTerm2 and the rest typed into it). Stop before the first key.
-    # A launch with CEF takes a few seconds longer to become key: three
-    # tries a second apart before deciding someone else has the Mac.
+    # A launch can take a few seconds to become key: three tries a second
+    # apart before deciding someone else has the Mac.
     # By pid, not name or bundle id: the installed app is also infiniterm
     # with the same id, and keys typed into it land in Ekin's real canvas.
     for _try in 1 2 3; do

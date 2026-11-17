@@ -14,9 +14,12 @@
 mod animator;
 mod background_show;
 mod body;
-#[cfg(feature = "browser")]
+// The browser card is the system web view, so it exists on macOS only (#826):
+// the `browser` feature on any other system compiles the stub, like the
+// feature off does.
+#[cfg(all(feature = "browser", target_os = "macos"))]
 mod browser_body;
-#[cfg(feature = "browser")]
+#[cfg(all(feature = "browser", target_os = "macos"))]
 mod page_surface;
 #[cfg(all(feature = "browser", target_os = "macos"))]
 mod webview;
@@ -24,12 +27,12 @@ mod webview;
 mod webview_download;
 #[cfg(all(feature = "browser", target_os = "macos"))]
 mod webview_input;
-// Without the feature, `browser_stub.rs` IS the browsers module: same names,
-// no CEF. Every call site stays as it is, and the difference between the two
-// builds lives in that one file. See its header.
-#[cfg(feature = "browser")]
+// Without the engine, `browser_stub.rs` IS the browsers module: same names,
+// no web view. Every call site stays as it is, and the difference between the
+// two builds lives in that one file. See its header.
+#[cfg(all(feature = "browser", target_os = "macos"))]
 mod browsers;
-#[cfg(not(feature = "browser"))]
+#[cfg(not(all(feature = "browser", target_os = "macos")))]
 #[path = "browser_stub.rs"]
 mod browsers;
 mod chrome;
@@ -151,17 +154,6 @@ mod app_id_tests {
         let script = include_str!("../../site/public/install.sh");
         assert!(script.contains(&format!("$apps/{APP_ID}.desktop")));
         assert!(script.contains(&format!("StartupWMClass={APP_ID}\n")));
-    }
-}
-
-#[cfg(all(test, feature = "browser"))]
-mod cef_start_tests {
-    use super::starts_cef;
-
-    #[test]
-    fn a_joined_window_never_starts_cef_so_its_quit_never_shuts_it_down() {
-        assert!(!starts_cef(true));
-        assert!(starts_cef(false));
     }
 }
 
@@ -483,8 +475,6 @@ pub struct AppView {
     /// The picture list and its rotation (`ui.backgroundImage`).
     pub background: background_show::Show,
     pub scale_factor: f32,
-    /// CEF initialised in this process: browser cards can open surfaces.
-    pub cef_running: bool,
     /// The system's reduced-motion switch, read at launch; it outranks
     /// `ui.animations`.
     pub reduce_motion: bool,
@@ -538,45 +528,13 @@ fn system_reduces_motion() -> bool {
     }
 }
 
-/// Whether this process starts CEF. A joined window (`ift join`, #423, #444)
-/// has no browser cards (they are refused there and the host's show as
-/// "browser on <host>"), so it has nothing for CEF to do, and quitting it
-/// crashed inside CEF's shutdown (EXC_BREAKPOINT, three reports on the Air).
-/// The helper invocations are decided before this, in `early`.
-#[cfg(feature = "browser")]
-fn starts_cef(joined: bool) -> bool {
-    !joined
-}
-
 fn main() {
     // Windows: this process and everything under it in one job, so the tree
-    // dies with us however we end. BEFORE CEF, or the subprocesses it is
-    // about to start would be outside the job and outlive us; measured, a
-    // killed infiniterm left all eight of Chromium's processes running
-    // eight seconds later. This is also what makes the quit below able to
-    // just exit. See `infiniterm_core::job`.
+    // dies with us however we end. It was made for Chromium's subprocesses
+    // (CEF, removed in #826); kept because it is also what makes the quit
+    // below able to just exit. See `infiniterm_core::job`.
     #[cfg(windows)]
     infiniterm_core::job::adopt_this_process();
-    // CEF first: a helper invocation runs and exits here; the browser
-    // process loads the framework from the bundle and goes on. Outside a
-    // bundle there is no framework and the app runs without browser cards.
-    // On the Mac this is skipped unless `browser.engine` is `cef` (#826):
-    // the helpers are their own executable there, and the webview engine
-    // needs no CEF at all. Elsewhere the helpers are this exe, so it always
-    // runs (`startup_wants_cef`).
-    #[cfg(feature = "browser")]
-    let mut cef = if !runtime::startup_wants_cef() {
-        None
-    } else {
-        match infiniterm_browser::process::early() {
-            Ok(p) => Some(p),
-            Err(infiniterm_browser::process::Unavailable::Helper(code)) => std::process::exit(code),
-            Err(infiniterm_browser::process::Unavailable::NoFramework) => {
-                eprintln!("[infiniterm] CEF framework not beside the executable: no browser cards");
-                None
-            }
-        }
-    };
     // An `ift serve` of this data dir (a canvas host kept while the app was
     // closed, #438) is asked to save and go first: the app takes over its
     // canvas and its sessions, and viewers join the app (#442). `ift serve`
@@ -633,40 +591,6 @@ fn main() {
         keycode::install();
         #[cfg(target_os = "macos")]
         finder_service::register();
-        // Without the feature there is no CEF to start and no pump to run:
-        // `browser_stub.rs` draws those cards instead.
-        #[cfg(not(feature = "browser"))]
-        let cef_running = false;
-        #[cfg(feature = "browser")]
-        let cef_running = match cef.as_mut().filter(|_| starts_cef(joined)) {
-            Some(p) => {
-                // CEF's two methods on gpui's NSApplication; nothing on
-                // Windows owns an NSApplication to patch.
-                #[cfg(target_os = "macos")]
-                infiniterm_browser::app_protocol::install();
-                let ok = p.start();
-                if !ok {
-                    eprintln!("[infiniterm] CEF did not initialise: no browser cards");
-                }
-                ok
-            }
-            None => false,
-        };
-        #[cfg(feature = "browser")]
-        if cef_running {
-            // CEF's message pump: one turn every 4 ms while a browser is
-            // open, as the spikes ran it; with none, when CEF asked for one
-            // (at most every 33 ms). The 4 ms turn with no browser was the
-            // largest part of the idle floor: CEF's own work plus waking the
-            // run loop 250 times a second (`next_pump`).
-            cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
-                infiniterm_browser::process::pump();
-                cx.background_executor()
-                    .timer(infiniterm_browser::process::next_pump())
-                    .await;
-            })
-            .detach();
-        }
         // The app menu, as the reference's menu.rs builds it by hand: no
         // File menu (its Close Window sat on Cmd+W, the card-close key),
         // and no Edit menu (a webview needed one for Cmd+C/V, gpui does
@@ -812,7 +736,6 @@ fn main() {
                 fonts::remember_installed(window);
                 let view = cx.new(|cx| {
                     let mut app = AppView::new(cx.focus_handle(), window.scale_factor());
-                    app.cef_running = cef_running;
                     app.reduce_motion = system_reduces_motion();
                     runtime::startup(&mut app);
                     fullscreen::set_mode(app.model.config.ui.fullscreen);
@@ -1061,13 +984,6 @@ fn main() {
                     // being waited on to do.
                     #[cfg(windows)]
                     infiniterm_core::job::exit_now();
-                    #[cfg(not(windows))]
-                    {
-                        #[cfg(feature = "browser")]
-                        if cef_running {
-                            infiniterm_browser::process::stop();
-                        }
-                    }
                     // `on_app_quit` wants a future. On Windows nothing
                     // reaches it, which is the point of the line above.
                     #[allow(unreachable_code)]

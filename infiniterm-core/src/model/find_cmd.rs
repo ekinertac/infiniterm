@@ -1,4 +1,4 @@
-//! Find in page: the bar's state and the four moves it answers. Chromium
+//! Find in page: the bar's state and the four moves it answers. The web view
 //! does the searching and the highlighting; this only says what to look for
 //! and which way to step.
 //!
@@ -21,7 +21,7 @@ pub struct FindState {
     pub query: String,
     /// The browser card being searched. The bar closes when focus leaves it.
     pub card_id: Option<String>,
-    /// What Chromium last reported: matches, and which one is current.
+    /// What the web view last reported: matches, and which one is current.
     pub matches: i32,
     pub active: i32,
 }
@@ -29,7 +29,7 @@ pub struct FindState {
 impl Model {
     pub fn open_find(&mut self) {
         self.with_active_card(|m, id| {
-            // A page is searched by Chromium, a terminal's scrollback by
+            // A page is searched by the web view, a terminal's scrollback by
             // alacritty (`Grid::find`); the bar is the same.
             if !matches!(
                 m.card(&id).map(|c| c.kind),
@@ -97,7 +97,8 @@ impl Model {
         });
     }
 
-    /// The count Chromium reported, which arrives several times per search.
+    /// The count the web view reported, which may arrive several times per
+    /// search.
     pub fn find_result(&mut self, card_id: &str, matches: i32, active: i32) {
         if self.find.card_id.as_deref() != Some(card_id) {
             return;

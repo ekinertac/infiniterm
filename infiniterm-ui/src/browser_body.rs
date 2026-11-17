@@ -1,87 +1,54 @@
-//! The browser card: one CEF surface per tab, the active one painted as a
-//! texture inside the card. Port of `BrowserCard.svelte` on
-//! `infiniterm-browser`, which is the spike's `browser.rs` made permanent,
-//! extended for tabs per
+//! The browser card: one system web view per tab (`webview.rs`, behind the
+//! `PageSurface` trait), floating over the card's page area, with a snapshot
+//! drawn by gpui as the tab's texture whenever the page cannot be shown live
+//! (far zoom, a card over it, a drag). Extended for tabs per
 //! `docs/superpowers/specs/2026-09-19-browser-tabs-design.md`.
 //!
-//! Every tab lays out at the card's size in world units and is drawn at
-//! whatever the zoom makes of it, so labels, rings and the palette paint
-//! over it like over any card and it scales with the canvas. Only the
-//! active tab's pixels are kept, but every tab's surface stays LIVE the
-//! way Chrome's do: a background tab keeps loading, keeps its scroll
-//! position, keeps its size, so switching to it shows the page rather
-//! than a blank waiting to re-render. Keys: the app owns Cmd except the
-//! edit chords a page needs (copy, paste, cut, select all, undo) and the
-//! page-zoom chords the model rebinds (`browser_keys.rs`); everything
-//! else goes to the page once it has focus. Focus is deliberate: a click
-//! on an UNFOCUSED card only focuses it (the scrim takes it), the next
-//! reaches the page; arrow-focusing a card never gives the page focus.
-//! That same `page_focused` IS the keyboard lock the tab chords need, so
-//! the tab-management chords never reach a surface at all: they are
+//! Every tab lays out at the card's size in world units and is given the
+//! zoom, so it scales with the canvas. Every tab's surface stays LIVE the way
+//! Chrome's do: a background tab keeps loading, keeps its scroll position,
+//! keeps its size, so switching to it shows the page rather than a blank.
+//! Keys: the app owns Cmd except the edit chords a page needs (copy, paste,
+//! cut, select all, undo) and the page-zoom chords the model rebinds
+//! (`browser_keys.rs`); everything else goes to the page once it has focus
+//! (`webview_input.rs`). Focus is deliberate: a click on an UNFOCUSED card
+//! only focuses it (the scrim takes it), the next reaches the page;
+//! arrow-focusing a card never gives the page focus. That same
+//! `page_focused` IS the keyboard lock the tab chords need, so the
+//! tab-management chords never reach a surface at all: they are
 //! `Model::browser_tab_*` (`tabs_cmd.rs`), and what arrives here is the
 //! changed `card.tabs` that `browsers.rs` reconciles against `self.tabs`.
 //!
-//! Without CEF (the bare binary outside a bundle) the card says so and
-//! stays a rectangle, with one placeholder tab.
+//! Where it fits: built by `browsers.rs` (`reconcile_browsers`), painted by
+//! `paint.rs`, takes its mouse and keys from `input.rs`. This file is
+//! compiled on macOS only; elsewhere `browser_stub.rs` stands in for it.
 use crate::body::{BodyAction, CardBody};
-use crate::page_surface::{Engine, PageSurface, Placement};
+use crate::page_surface::{Button, Engine, Mods, PageSurface, Placement};
 use crate::tab_strip::{
     hover_lines, hovered, paint_hover_label, paint_strip, strip_hit, strip_world_h, StripStyle,
     TabDrag,
 };
-use gpui::{
-    fill, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage, Window,
-};
+use gpui::{fill, point, px, size, App, Bounds, Hsla, Keystroke, Pixels, RenderImage, Window};
 use image::{Frame as ImageFrame, RgbaImage};
-use infiniterm_browser::{Button, Mods, Surface};
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::webview_policy as policy;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
-/// The device scale CEF renders at moves in steps this fine, so an
-/// animated zoom settles on one value instead of asking for a new frame
-/// size every tick.
-const DEVICE_SCALE_STEPS_PER_UNIT: f64 = 2.;
-/// CEF is never asked to render past this device scale: a sanity ceiling
-/// on how many pixels a zoomed-in browser card can demand.
-const DEVICE_SCALE_MAX: f64 = 3.;
 /// The placeholder text's inset from the card's corner.
 const STATUS_TEXT_PAD_PX: f64 = 12.;
 /// The placeholder text's line height, looser than its font size.
 const STATUS_LINE_HEIGHT_RATIO: f32 = 1.5;
-
-/// What the card knows about how current a tab's newest frame is: the layout
-/// size it wants, when a frame last arrived or that size last changed, and how
-/// often CEF has been asked to paint again for it (`frame_fit::needs_kick`).
-/// After a quick burst of resizes CEF can deliver a frame of an older size and
-/// then nothing: without asking, the page stays at that size (#479).
-#[derive(Default)]
-struct Repaint {
-    wanted_css: (i32, i32),
-    /// Frames taken so far, and how many `paint` has noticed.
-    frame_seq: u64,
-    seen_frame: u64,
-    /// When (ms) a frame last arrived or the wanted size last changed.
-    quiet_since: f64,
-    /// Requests made for the current wanted size, and when the last was.
-    kicks: u32,
-    last_kick_ms: f64,
-}
 
 /// One tab: everything that was a single field on `BrowserBody` before
 /// tabs existed, once per open page.
 pub struct Tab {
     pub url: String,
     pub surface: Option<Box<dyn PageSurface>>,
-    /// Why there is no surface, for the card to say.
-    pub unavailable: Option<String>,
     texture: Option<Arc<RenderImage>>,
-    /// The layout size (CSS pixels) `texture` was painted at, so an old frame
-    /// is drawn at its natural size while a resize repaints (#479).
+    /// The layout size (CSS pixels) `texture` was taken at, so an old
+    /// snapshot is drawn at its natural size while a resize goes on (#479).
     texture_css: (i32, i32),
-    /// How current `texture` is, and when to ask CEF for a fresh one (#479).
-    repaint: Repaint,
     /// The page title as last reported, so a change can be told from the
     /// same title arriving every frame. Not the card's title: that is a
     /// name somebody CHOSE, and a page must never overwrite it.
@@ -96,33 +63,20 @@ pub struct Tab {
 }
 
 impl Tab {
-    fn open(url: &str, world: Size, scale: f32, cef_running: bool, engine: Engine) -> Tab {
-        let (surface, unavailable): (Option<Box<dyn PageSurface>>, Option<String>) =
-            if let Engine::Webview { store, devtools } = engine {
-                Self::open_webview(url, world, store, devtools)
-            } else if cef_running {
-                match Surface::open(url, world.w.round() as i32, world.h.round() as i32, scale) {
-                    Some(s) => (Some(Box::new(s)), None),
-                    None => (None, Some("could not create the browser".to_string())),
-                }
-            } else {
-                (
-                    None,
-                    // Either no bundle, or `browser.engine` was changed to
-                    // `cef` while the app ran: CEF starts only at launch.
-                    Some(
-                        "CEF is not loaded: it needs the app bundle, and browser.engine \"cef\" needs a restart"
-                            .to_string(),
-                    ),
-                )
-            };
+    fn open(url: &str, world: Size, engine: Engine) -> Tab {
+        // The web view itself is made lazily, in `place`, when a window is
+        // at hand.
+        let surface = crate::webview::WebSurface::open(
+            url,
+            engine.store,
+            (world.w.round() as i32, world.h.round() as i32),
+            engine.devtools,
+        );
         Tab {
             url: url.to_string(),
-            surface,
-            unavailable,
+            surface: Some(Box::new(surface)),
             texture: None,
             texture_css: (0, 0),
-            repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
             from_popup: false,
@@ -133,38 +87,6 @@ impl Tab {
         if let Some(s) = self.surface.take() {
             s.close();
         }
-    }
-
-    /// A tab on the system web view. Only macOS has one; `browser.engine`
-    /// falls back to `cef` elsewhere before a body is ever made, so the
-    /// other arm is a guard, not a feature.
-    #[cfg(target_os = "macos")]
-    fn open_webview(
-        url: &str,
-        world: Size,
-        store: [u8; 16],
-        devtools: bool,
-    ) -> (Option<Box<dyn PageSurface>>, Option<String>) {
-        let surface = crate::webview::WebSurface::open(
-            url,
-            store,
-            (world.w.round() as i32, world.h.round() as i32),
-            devtools,
-        );
-        (Some(Box::new(surface)), None)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn open_webview(
-        _url: &str,
-        _world: Size,
-        _store: [u8; 16],
-        _devtools: bool,
-    ) -> (Option<Box<dyn PageSurface>>, Option<String>) {
-        (
-            None,
-            Some("the webview engine is for macOS only".to_string()),
-        )
     }
 }
 
@@ -190,17 +112,15 @@ pub struct BrowserBody {
     /// Mirrors `card.locked`, written by `browsers.rs` every frame, so the
     /// tab strip can draw the lock state without a `Card` to read.
     pub locked: bool,
-    /// Which tab was last told it has CEF's keyboard focus, so the handover
-    /// on a tab switch takes it off exactly one surface. CEF keeps focus per
-    /// browser and a fresh one has never had it, so without this a new tab
-    /// would take no typing at all.
+    /// Which tab was last told it has the keyboard focus, so the handover
+    /// on a tab switch takes it off exactly one surface and a fresh tab,
+    /// which has never had it, takes typing.
     focused_tab: Option<usize>,
     /// The page's own zoom the card carries (`card.zoom`), applied to every
     /// tab: a background tab must already be at the card's zoom when it
     /// becomes the visible one.
     pub zoom: Option<f64>,
     world: Size,
-    scale: f32,
     painted_focused: bool,
     /// The page has keyboard focus: a click reached it since the card
     /// was focused. This is also what the keyboard lock IS (see the
@@ -254,19 +174,15 @@ pub struct BrowserBody {
     /// A right-click since the last drain, for `browsers.rs` to turn into
     /// the app-level menu overlay. Aggregated across tabs rather than kept
     /// per tab: a menu only ever opens from a click on the visible page.
-    pub context_menu: Option<infiniterm_browser::ContextMenuRequest>,
+    pub context_menu: Option<crate::page_surface::ContextMenuRequest>,
     /// The texture last painted into gpui's sprite atlas, so `paint` can
     /// evict it the moment a new one takes its place. gpui has no atlas
     /// LRU: every `RenderImage::new` mints a fresh id, and nothing but
     /// `Window::drop_image` ever frees the tile it was painted into, so
     /// without this an open browser card grows the atlas by one tile per
-    /// CEF frame for as long as it runs.
+    /// snapshot for as long as it runs.
     painted_texture: Option<Arc<RenderImage>>,
-    /// Remembered so a tab opened later is built the same way the first
-    /// one was.
-    cef_running: bool,
-    /// Which engine this card's tabs open with, fixed when the card is made
-    /// (`browser.engine`): a card keeps its engine until it is reopened.
+    /// What a tab opened later is built with, the same as the first one.
     engine: Engine,
     /// Window-pixel rects painted over this card this frame (cards in front,
     /// an overlay, the drag ghost), set by `paint.rs` before `paint`
@@ -301,19 +217,6 @@ impl BrowserBody {
         card_id: &str,
         url: &str,
         world: Size,
-        scale: f32,
-        cef_running: bool,
-        style: StripStyle,
-    ) -> BrowserBody {
-        Self::with_engine(card_id, url, world, scale, cef_running, style, Engine::Cef)
-    }
-
-    pub fn with_engine(
-        card_id: &str,
-        url: &str,
-        world: Size,
-        scale: f32,
-        cef_running: bool,
         style: StripStyle,
         engine: Engine,
     ) -> BrowserBody {
@@ -324,8 +227,6 @@ impl BrowserBody {
             tabs: vec![Tab::open(
                 url,
                 page_world_size(world, style.font_px, 1.),
-                scale,
-                cef_running,
                 engine,
             )],
             active: 0,
@@ -333,7 +234,6 @@ impl BrowserBody {
             focused_tab: None,
             zoom: None,
             world,
-            scale,
             painted_focused: false,
             page_focused: false,
             last_escape_ms: None,
@@ -356,7 +256,6 @@ impl BrowserBody {
             page_closed: vec![],
             context_menu: None,
             painted_texture: None,
-            cef_running,
             engine,
             covers: vec![],
         }
@@ -382,7 +281,7 @@ impl BrowserBody {
     /// arrives from `card.active_tab` like everything else.
     pub fn open_tab(&mut self, url: &str) {
         let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
-        let mut tab = Tab::open(url, page, self.scale, self.cef_running, self.engine);
+        let mut tab = Tab::open(url, page, self.engine);
         // Made for an address a page opened: that page may close it again.
         if let Some(at) = self.popup_urls.iter().position(|u| u == url) {
             self.popup_urls.remove(at);
@@ -404,11 +303,8 @@ impl BrowserBody {
         self.tabs.clear();
         self.focused_tab = None;
         let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
-        let (scale, cef, engine) = (self.scale, self.cef_running, self.engine);
-        self.tabs = urls
-            .iter()
-            .map(|u| Tab::open(u, page, scale, cef, engine))
-            .collect();
+        let engine = self.engine;
+        self.tabs = urls.iter().map(|u| Tab::open(u, page, engine)).collect();
         self.active = 0;
         self.apply_focus();
         self.dirty = true;
@@ -467,7 +363,7 @@ impl BrowserBody {
         self.dirty = true;
     }
 
-    /// Exactly the active tab's surface holds CEF's keyboard focus, and only
+    /// Exactly the active tab's surface holds the keyboard focus, and only
     /// while the card's page is focused. Enforced in one place because three
     /// things move it: a click, a tab switch, and a closed tab shifting the
     /// indices under both.
@@ -510,16 +406,14 @@ impl BrowserBody {
             // `window.close()` (#672): taken from every tab so the request
             // cannot pile up, honoured only for a tab a page opened.
             // A click reached a native page whose card had the focus but not
-            // the lock: the card locks, as a click that reaches a CEF page
-            // does (`mouse_down`).
+            // the lock: the card locks.
             if surface.take_page_click() && is_active && !self.page_focused {
                 self.page_focused = true;
                 self.dirty = true;
             }
             // Double-Escape for a native page (#820): its Escapes never reach
-            // gpui, so the monitor stamped them. The same counting and the
-            // same 400 ms as the CEF card (`input.rs`); the first Escape has
-            // already reached the page.
+            // gpui, so the monitor stamped them (`browser_keys::escape_step`
+            // counts, 400 ms); the first Escape has already reached the page.
             for at in surface.take_escapes() {
                 if is_active && self.page_focused {
                     let (double, next) =
@@ -538,14 +432,14 @@ impl BrowserBody {
                     if let Some(img) =
                         RgbaImage::from_raw(frame.width, frame.height, frame.bgra.clone())
                     {
-                        // CEF hands BGRA and gpui stores BGRA: the bytes go in as they are.
+                        // The snapshot is BGRA and gpui stores BGRA: the
+                        // bytes go in as they are.
                         tab.texture = Some(Arc::new(RenderImage::new(SmallVec::from_elem(
                             ImageFrame::new(img),
                             1,
                         ))));
                         tab.texture_css = (frame.css_width, frame.css_height);
-                        tab.repaint.frame_seq += 1;
-                        if infiniterm_browser::surface::keylog() {
+                        if crate::page_surface::keylog() {
                             eprintln!(
                                 "[browser] ui takes frame {}x{}px css {}x{}",
                                 frame.width, frame.height, frame.css_width, frame.css_height
@@ -634,12 +528,6 @@ impl BrowserBody {
         }
     }
 
-    /// The OS cursor the active page last asked for (a pointer over a link,
-    /// an I-beam over an input), or `Arrow` before it has said anything.
-    pub fn cursor_style(&self) -> CursorStyle {
-        cursor_style_for(self.active_surface().map_or("default", |s| s.cursor()))
-    }
-
     /// Releases the last texture painted, if any, from gpui's sprite atlas.
     /// Called from `paint.rs::reconcile_bodies` right before this card's
     /// body is dropped: a closed card's last frame is not otherwise freed
@@ -650,6 +538,8 @@ impl BrowserBody {
         }
     }
 
+    // Only a click's modifiers reach a page from here (`mouse_button`); typing
+    // and the wheel go to the web view through AppKit.
     fn mods(m: &gpui::Modifiers) -> Mods {
         Mods {
             shift: m.shift,
@@ -666,16 +556,13 @@ impl Drop for BrowserBody {
     }
 }
 
-/// What CEF actually renders into: the card's world size minus the strip's
+/// The size the page is laid out at: the card's world size minus the strip's
 /// own band (`tab_strip::strip_world_h`, shared with the editor's strip).
-/// The strip used to be an overlay painted OVER the page after it painted
-/// at the full card height, which covered real page content under the
-/// strip's own rows rather than making room for it — tabs read as though
-/// they were slicing the top off every page, because they were. This is
-/// real space instead: the page is laid out and painted into the band
-/// below the strip, and every mouse coordinate forwarded to a surface is
-/// shifted by the same amount (see `mouse_down` and friends), so what is
-/// under the cursor on screen is what the page sees.
+/// The strip used to be an overlay painted OVER the page, which covered real
+/// page content under the strip's own rows rather than making room for it.
+/// This is real space instead: the page is laid out in the band below the
+/// strip, and every mouse coordinate forwarded to a surface is shifted by the
+/// same amount (see `mouse_down`).
 fn page_world_size(world: Size, font_px: f64, ui_scale: f32) -> Size {
     Size {
         w: world.w,
@@ -686,7 +573,7 @@ fn page_world_size(world: Size, font_px: f64, ui_scale: f32) -> Size {
 /// Whether the tile last painted (`last`), if any, should be evicted now
 /// that `new` was just painted into gpui's sprite atlas: never when the
 /// two are the SAME image, which is every frame nothing new has arrived
-/// from CEF and the unchanged texture is simply repainted again.
+/// from the web view and the unchanged texture is simply repainted again.
 fn texture_changed(last: Option<gpui::ImageId>, new: gpui::ImageId) -> bool {
     last.is_some_and(|id| id != new)
 }
@@ -706,69 +593,25 @@ impl CardBody for BrowserBody {
         if !focused {
             self.set_focus(false);
         }
-        // Drawn above 100%, the page is asked for more pixels rather than
-        // upscaled: the device scale follows the zoom in half steps, so an
-        // animation settles on one value instead of re-rendering per frame.
-        let device = (self.scale as f64 * scale * DEVICE_SCALE_STEPS_PER_UNIT).ceil()
-            / DEVICE_SCALE_STEPS_PER_UNIT;
-        let device = device.clamp(self.scale as f64, DEVICE_SCALE_MAX) as f32;
         // Every tab follows the zoom and the strip's own share of the card,
         // not just the visible one: a background tab has to be the right
-        // size the moment it becomes active, or the first frame after the
-        // switch is a stretched page. `Surface::resize` no-ops when nothing
-        // actually changed, so calling it every frame (rather than only on
-        // a scale change, as before) is what also picks up a live
-        // `ui.scale` change without a second code path to keep in step.
+        // size the moment it becomes active. The web view's `resize` no-ops
+        // when nothing changed, so calling it every frame also picks up a
+        // live `ui.scale` change without a second code path.
         let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
         let (page_w, page_h) = (page.w.round() as i32, page.h.round() as i32);
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
-                s.resize(page_w, page_h, device);
+                s.resize(page_w, page_h);
             }
         }
-        // The visible tab's newest frame may be of an older size than the one
-        // wanted, and CEF may have nothing more to send (#479): after a quiet
-        // moment ask it to paint again, a few times at most per wanted size.
-        if let Some(tab) = self.tabs.get_mut(self.active) {
-            let wanted = (page_w, page_h);
-            let r = &mut tab.repaint;
-            if r.wanted_css != wanted {
-                r.wanted_css = wanted;
-                r.quiet_since = now;
-                r.kicks = 0;
-            }
-            if r.seen_frame != r.frame_seq {
-                r.seen_frame = r.frame_seq;
-                r.quiet_since = now;
-            }
-            if tab.texture.is_some()
-                && infiniterm_browser::frame_fit::needs_kick(
-                    tab.texture_css,
-                    wanted,
-                    now - r.quiet_since,
-                    now - r.last_kick_ms,
-                    r.kicks,
-                )
-            {
-                if let Some(s) = &tab.surface {
-                    s.kick();
-                }
-                r.kicks += 1;
-                r.last_kick_ms = now;
-            }
-        }
-        // The strip is real space now, not an overlay: the page is laid out
-        // and painted into the band BELOW it, matching what `page_world_size`
-        // asked CEF to render. `mouse_down`/`mouse_up`/`mouse_move`/`wheel`
-        // shift every coordinate they forward by the same amount, so what is
-        // under the cursor on screen is what the page sees. Painting the
-        // page at the full card height and covering its top rows with an
-        // opaque strip was tried first and read as tabs slicing the top off
-        // every page, which is exactly what it was doing. `strip_h` here is
-        // the same formula `paint_strip` uses internally (screen pixels:
-        // world height times `scale`), computed ahead of it so the page can
-        // be painted into the right band BEFORE the strip is drawn on top
-        // of it, last, below.
+        // The strip is real space, not an overlay: the page is laid out and
+        // placed in the band BELOW it, matching what `page_world_size`
+        // asked for. `mouse_down` and friends shift every coordinate they
+        // forward by the same amount. `strip_h` here is the same formula
+        // `paint_strip` uses internally (screen pixels: world height times
+        // `scale`), computed ahead of it so the page lands in the right band
+        // BEFORE the strip is drawn on top of it, last, below.
         let strip_h = px((strip_world_h(self.style.font_px, self.ui_scale) * scale) as f32);
         let page_bounds = Bounds::new(
             point(bounds.origin.x, bounds.origin.y + strip_h),
@@ -830,13 +673,14 @@ impl CardBody for BrowserBody {
                     bottom_left: radius,
                     bottom_right: radius,
                 };
-                // The frame is drawn at the size it was LAID OUT at (times the
-                // canvas zoom), anchored top-left and clipped to the page area:
-                // while a resize waits for CEF's repaint the newest frame is
-                // the old size, and stretching it to the new bounds squashed
-                // the page (#479). A settled card, and a canvas zoom, give the
-                // page area back exactly (`frame_fit`).
-                let (draw_w, draw_h) = infiniterm_browser::frame_fit::frame_draw_size(
+                // The snapshot is drawn at the size it was LAID OUT at (times
+                // the canvas zoom), anchored top-left and clipped to the page
+                // area: while a resize waits for a new snapshot the newest
+                // one is the old size, and stretching it to the new bounds
+                // squashed the page (#479). A settled card, and a canvas
+                // zoom, give the page area back exactly
+                // (`webview_policy::frame_draw_size`).
+                let (draw_w, draw_h) = policy::frame_draw_size(
                     texture_css.0,
                     texture_css.1,
                     scale,
@@ -845,7 +689,7 @@ impl CardBody for BrowserBody {
                 );
                 let fills = (draw_w - f32::from(page_bounds.size.width) as f64).abs() < 0.01
                     && (draw_h - f32::from(page_bounds.size.height) as f64).abs() < 0.01;
-                if infiniterm_browser::surface::keylog() && !fills {
+                if crate::page_surface::keylog() && !fills {
                     eprintln!(
                         "[browser] draws old size {draw_w:.0}x{draw_h:.0} in page area {:.0}x{:.0} (css {}x{} zoom {scale:.2})",
                         f32::from(page_bounds.size.width),
@@ -894,10 +738,7 @@ impl CardBody for BrowserBody {
             None => {
                 let font_size = crate::glyph_size::zoomed(self.style.font_px, scale, window);
                 if font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
-                    let text = self
-                        .active_tab()
-                        .and_then(|t| t.unavailable.clone())
-                        .unwrap_or_else(|| format!("loading {}", self.active_url()));
+                    let text = format!("loading {}", self.active_url());
                     let line = crate::text::shape(
                         window,
                         &text,
@@ -967,8 +808,7 @@ impl CardBody for BrowserBody {
         let page = page_world_size(world, self.style.font_px, self.ui_scale);
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
-                let device = s.device_scale();
-                s.resize(page.w.round() as i32, page.h.round() as i32, device);
+                s.resize(page.w.round() as i32, page.h.round() as i32);
             }
         }
         self.dirty = true;
@@ -996,11 +836,11 @@ impl CardBody for BrowserBody {
         let Some(surface) = self.active_surface() else {
             return BodyAction::None;
         };
+        // Typing never gets here (the page has the keyboard); an edit chord
+        // the app did not claim does.
         if k.modifiers.platform {
             surface.edit_chord(&k.key, k.modifiers.shift);
-            return BodyAction::None;
         }
-        surface.key(&k.key, k.key_char.as_deref(), Self::mods(&k.modifiers));
         BodyAction::None
     }
 
@@ -1091,7 +931,7 @@ impl CardBody for BrowserBody {
         // A drag that started on the page (the only kind that reaches here:
         // `captures_drag` is `left_down`, only ever set below the strip) can
         // still end with the pointer dragged back up over the strip's row;
-        // clamped rather than sent negative, off the top of what CEF laid out.
+        // clamped rather than sent negative, off the top of the page.
         let page_y = (local.y - strip_world_h(self.style.font_px, self.ui_scale)).max(0.);
         if let Some(surface) = self.active_surface() {
             surface.mouse_button(
@@ -1105,7 +945,9 @@ impl CardBody for BrowserBody {
         }
     }
 
-    fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
+    // Pointer moves over the page itself go to the web view through AppKit,
+    // so only the strip's hover and a tab drag are ours.
+    fn mouse_move(&mut self, local: Point, _modifiers: &gpui::Modifiers) {
         if let Some(drag) = self.tab_drag.as_mut() {
             if drag.moved(local.x, self.style.font_px, self.ui_scale) {
                 self.dirty = true;
@@ -1114,44 +956,10 @@ impl CardBody for BrowserBody {
         }
         let over = self.tab_at(local);
         self.set_hover(over);
-        let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
-        // A selection dragged up over the strip keeps extending, clamped to
-        // the page's top the way `mouse_up` clamps the release.
-        if local.y < strip_h && !self.left_down {
-            return;
-        }
-        let held = self.left_down.then_some(Button::Left);
-        if let Some(surface) = self.active_surface() {
-            surface.mouse_move(
-                local.x as f32,
-                (local.y - strip_h).max(0.) as f32,
-                Self::mods(modifiers),
-                held,
-            );
-        }
     }
 
     fn mouse_leave(&mut self) {
         self.set_hover(None);
-        if let Some(surface) = self.active_surface() {
-            surface.mouse_leave();
-        }
-    }
-
-    fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
-        let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
-        if local.y < strip_h {
-            return;
-        }
-        if let Some(surface) = self.active_surface() {
-            surface.wheel(
-                local.x as f32,
-                (local.y - strip_h) as f32,
-                Self::mods(modifiers),
-                dx as f32,
-                dy as f32,
-            );
-        }
     }
 
     fn set_covers(&mut self, covers: Vec<[f64; 4]>) {
@@ -1171,13 +979,6 @@ impl CardBody for BrowserBody {
                     .as_ref()
                     .is_some_and(|s| s.has_new_frame() || s.wants_frame(now))
             })
-            // The visible page is of an older size and a repaint request is
-            // still to come: keep painting so `paint` can time it (#479).
-            || self.tabs.get(self.active).is_some_and(|t| {
-                t.texture.is_some()
-                    && t.repaint.kicks < infiniterm_browser::frame_fit::MAX_KICKS
-                    && infiniterm_browser::frame_fit::is_stale(t.texture_css, t.repaint.wanted_css)
-            })
     }
 
     fn captures_drag(&self) -> bool {
@@ -1186,37 +987,6 @@ impl CardBody for BrowserBody {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
-    }
-}
-
-/// The CSS cursor keyword `Surface::cursor` reports, mapped to gpui's
-/// cursor styles. gpui has no spinner or "all scroll" cursor, so the CEF
-/// types that would need one (`wait`, `progress`, `help`, `move`) fall back
-/// to the arrow rather than picking something misleading.
-fn cursor_style_for(name: &str) -> CursorStyle {
-    match name {
-        "pointer" => CursorStyle::PointingHand,
-        "text" => CursorStyle::IBeam,
-        "crosshair" => CursorStyle::Crosshair,
-        "grab" => CursorStyle::OpenHand,
-        "grabbing" => CursorStyle::ClosedHand,
-        "e-resize" => CursorStyle::ResizeRight,
-        "w-resize" => CursorStyle::ResizeLeft,
-        "n-resize" => CursorStyle::ResizeUp,
-        "s-resize" => CursorStyle::ResizeDown,
-        "ns-resize" => CursorStyle::ResizeUpDown,
-        "ew-resize" => CursorStyle::ResizeLeftRight,
-        "nesw-resize" => CursorStyle::ResizeUpRightDownLeft,
-        "nwse-resize" => CursorStyle::ResizeUpLeftDownRight,
-        "col-resize" => CursorStyle::ResizeColumn,
-        "row-resize" => CursorStyle::ResizeRow,
-        "not-allowed" => CursorStyle::OperationNotAllowed,
-        "copy" => CursorStyle::DragCopy,
-        "alias" => CursorStyle::DragLink,
-        "context-menu" => CursorStyle::ContextualMenu,
-        "vertical-text" => CursorStyle::IBeamCursorForVerticalLayout,
-        "none" => CursorStyle::None,
-        _ => CursorStyle::Arrow,
     }
 }
 
@@ -1237,19 +1007,25 @@ fn test_strip_style() -> StripStyle {
 mod tab_tests {
     use super::*;
 
+    // The web view is made lazily when a window places it, so a body can be
+    // built and its tabs managed with no window (these tests).
+    fn test_engine() -> Engine {
+        Engine {
+            store: [0; 16],
+            devtools: false,
+        }
+    }
+
     #[test]
-    fn a_body_with_no_cef_still_reports_one_unavailable_tab() {
+    fn a_new_body_has_one_tab() {
         let body = BrowserBody::new(
             "card-1",
             "https://a.example",
             Size { w: 10., h: 10. },
-            1.,
-            false,
             test_strip_style(),
+            test_engine(),
         );
         assert_eq!(body.tabs.len(), 1);
-        assert!(body.tabs[0].surface.is_none());
-        assert!(body.tabs[0].unavailable.is_some());
         assert_eq!(body.active, 0);
     }
 
@@ -1259,9 +1035,8 @@ mod tab_tests {
             "card-1",
             "a",
             Size { w: 10., h: 10. },
-            1.,
-            false,
             test_strip_style(),
+            test_engine(),
         );
         body.open_tab("b");
         body.open_tab("c");
@@ -1283,9 +1058,8 @@ mod tab_tests {
             "card-1",
             "https://first.example",
             Size { w: 10., h: 10. },
-            1.,
-            false,
             test_strip_style(),
+            test_engine(),
         );
         body.popup_urls.push("https://login.example/popup".into());
         body.open_tab("https://by-hand.example");
@@ -1306,10 +1080,8 @@ mod tab_label_tests {
         let mut tab = Tab {
             url: "https://a.example".into(),
             surface: None,
-            unavailable: None,
             texture: None,
             texture_css: (0, 0),
-            repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
             from_popup: false,
@@ -1336,9 +1108,11 @@ mod mouse_down_strip_tests {
             "card-1",
             "https://a.example",
             Size { w: 800., h: 600. },
-            1.,
-            false,
             test_strip_style(),
+            crate::page_surface::Engine {
+                store: [0; 16],
+                devtools: false,
+            },
         );
         let action = body.mouse_down(
             Point { x: 1000., y: 5. },
@@ -1354,7 +1128,7 @@ mod mouse_down_strip_tests {
 mod page_world_size_tests {
     use super::*;
 
-    // What CEF is actually asked to render: the strip's band comes off the
+    // What the page is laid out at: the strip's band comes off the
     // card's own height, never its width, and never at `ui_scale` 1's cost
     // alone — a bigger interface takes a bigger bite.
     #[test]
@@ -1368,9 +1142,8 @@ mod page_world_size_tests {
         assert_eq!(scaled.h, 600. - strip_world_h(14., 2.));
     }
 
-    // A card shorter than the strip itself must not ask CEF for a negative
-    // or zero height: `Surface::open`/`resize` already floor at 1px on
-    // their own side, but a page-space calculation going negative would
+    // A card shorter than the strip itself must not lay the page out at a
+    // negative or zero height: a page-space calculation going negative would
     // send mouse coordinates the wrong direction first.
     #[test]
     fn a_card_shorter_than_the_strip_still_gets_a_positive_page_height() {
@@ -1391,7 +1164,7 @@ mod texture_changed_tests {
         assert!(!texture_changed(None, ImageId(1)));
     }
 
-    // The same id painted again is every frame CEF has not produced a new
+    // The same id painted again is every frame no new snapshot has produced a new
     // one: evicting it would drop the exact tile this frame's own scene
     // still points at.
     #[test]
@@ -1399,27 +1172,10 @@ mod texture_changed_tests {
         assert!(!texture_changed(Some(ImageId(7)), ImageId(7)));
     }
 
-    // A different id is a real new CEF frame: the old tile is no longer
+    // A different id is a real new snapshot: the old tile is no longer
     // referenced by anything painted and is safe to evict.
     #[test]
     fn a_different_id_is_a_change() {
         assert!(texture_changed(Some(ImageId(7)), ImageId(8)));
-    }
-}
-
-#[cfg(test)]
-mod cursor_tests {
-    use super::*;
-
-    #[test]
-    fn a_link_gets_a_pointer_and_an_input_gets_an_ibeam() {
-        assert_eq!(cursor_style_for("pointer"), CursorStyle::PointingHand);
-        assert_eq!(cursor_style_for("text"), CursorStyle::IBeam);
-    }
-
-    #[test]
-    fn an_unmapped_or_default_cursor_falls_back_to_the_arrow() {
-        assert_eq!(cursor_style_for("default"), CursorStyle::Arrow);
-        assert_eq!(cursor_style_for("wait"), CursorStyle::Arrow);
     }
 }

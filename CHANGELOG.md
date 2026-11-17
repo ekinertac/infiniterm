@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-17
 
+- Chromium is gone from the app. Browser cards on the Mac use the system's own WebKit only, and the app is 317 MB smaller (about 50 MB instead of 367 MB). What you lose: the Claude in Chrome extension in browser cards (and `ift install-extension`, which now says so and exits 2), the DevTools card (the DevTools command now tells you to use Safari's Develop menu), and the Google sign-in workaround. The setting `browser.engine` is removed; a settings.json that still has it keeps working, the key is ignored.
+- On Windows and Linux a browser card now says "Browser cards are not available on this system yet." Chromium was the only engine there, and there is no replacement yet.
 - Fixed: on macOS 27.2 the window could not be dragged by its title bar. Dragging the empty part of the bar moves it again; dragging a workspace tab still reorders tabs and never moves the window.
 - Cmd+Ctrl held with a two-finger scroll now pans the canvas, in every direction, the content following your fingers, over any card including a browser card. It is listed in the shortcuts panel (Cmd+/). Before, Cmd+Ctrl with a scroll zoomed.
 - Fixed: with `browser.engine` set to `"webview"`, Cmd+click and middle-click on a `javascript:` or `data:` link no longer open a tab; only web, file and `about:` addresses do, and another app's link still asks first.

@@ -12,36 +12,20 @@ publish.workspace = true
 name = "infiniterm"
 path = "src/main.rs"
 
-# CEF's helper process. Nothing to help without CEF, so it is not built
-# when the browser feature is off.
-[[bin]]
-name = "infiniterm-helper"
-path = "src/bin/helper.rs"
-required-features = ["browser"]
-
-# For cef-rs's bundle-cef-app: the helper it lays out as the four
-# `infiniterm Helper*.app` bundles beside the framework.
-[package.metadata.cef.bundle]
-helper_name = "infiniterm-helper"
-
-# Browser cards, and the whole of CEF with them, are a feature so there can
-# be a build without them: Windows has no CEF build yet (phase 5 of
-# docs/windows-handoff.md), and the Lite/Pro split in ekinertac/notes#50 is
-# the same shape. ON by default, so macOS and every existing command are
-# unchanged; `--no-default-features` draws `browser_stub.rs` instead.
+# Browser cards are the system web view (WKWebView through wry, #761), so the
+# feature means "the webview engine, macOS only" (#826): its optional
+# dependencies are under the macOS target below, so on other systems naming
+# them here changes nothing, and `main.rs` draws `browser_stub.rs` there.
+# ON by default; `--no-default-features` draws the stub on the Mac too, which
+# is also the shape of the Lite/Pro split in ekinertac/notes#50.
 [features]
 default = ["browser"]
-# The system web view engine (`browser.engine` = `webview`, #761, macOS only)
-# rides on the same feature: its optional dependencies are under the macOS
-# target below, so on other systems naming them here changes nothing.
-browser = ["dep:infiniterm-browser", "dep:cef", "dep:wry", "dep:objc2", "dep:objc2-foundation", "dep:block2"]
+browser = ["dep:wry", "dep:objc2", "dep:objc2-foundation", "dep:block2"]
 
 [dependencies]
 infiniterm-core = { path = "../infiniterm-core" }
 infiniterm-term = { path = "../infiniterm-term" }
 infiniterm-editor = { path = "../infiniterm-editor" }
-infiniterm-browser = { path = "../infiniterm-browser", optional = true }
-cef = { version = "152.3.0", optional = true }
 image = "0.25"
 smallvec = "1"
 gpui = "0.2.2"

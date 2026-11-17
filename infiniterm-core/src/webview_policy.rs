@@ -27,7 +27,7 @@ pub const PAGE_ZOOM_MAX: f64 = 5.0;
 
 /// The page zoom WebKit gets: the canvas zoom times the page's own zoom
 /// (`card.zoom`, the browser zoom keys), so the page lays out at the card's
-/// world width divided by its own zoom, as a CEF page does.
+/// world width divided by its own zoom.
 pub fn page_zoom(card_zoom: Option<f64>, canvas_scale: f64) -> f64 {
     (card_zoom.unwrap_or(1.) * canvas_scale).clamp(PAGE_ZOOM_MIN, PAGE_ZOOM_MAX)
 }
@@ -361,12 +361,12 @@ pub fn parse_link(raw: &str) -> Option<String> {
     None
 }
 
-/// What a Cmd+click, Cmd+Shift+click or middle-click on a link does, as the
-/// Chromium card does it (every non-current-tab disposition opens a tab): the
-/// link, unless it is another app's, which goes to the app-link question.
-/// Only a page address opens a tab: `javascript:` and `data:` links, which
-/// `a.href` reports like any other, would run or show script-made content in
-/// a tab of their own, and Chromium does not open them either.
+/// What a Cmd+click, Cmd+Shift+click or middle-click on a link does, as in
+/// Chrome (every non-current-tab disposition opens a tab): the link, unless
+/// it is another app's, which goes to the app-link question. Only a page
+/// address opens a tab: `javascript:` and `data:` links, which `a.href`
+/// reports like any other, would run or show script-made content in a tab of
+/// their own, and Chrome does not open them either.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkOpen {
     Tab(String),
@@ -376,8 +376,8 @@ pub enum LinkOpen {
 }
 
 /// The schemes a link may open a tab on: web pages, local files and
-/// `about:`. The Chromium card gets only what Chromium itself would navigate
-/// to; a web view's `a.href` carries every scheme, so the list is explicit.
+/// `about:`. A web view's `a.href` carries every scheme, so the list is
+/// explicit.
 const TAB_SCHEMES: &[&str] = &["http", "https", "file", "about"];
 
 fn link_scheme(href: &str) -> Option<String> {
@@ -434,9 +434,84 @@ pub fn parse_context(raw: &str) -> Option<ContextInfo> {
     })
 }
 
+/// How far (screen pixels) a natural size may be from the available one and
+/// still count as the same: the card's bounds are fractional and a layout
+/// size is whole CSS pixels, so a settled card is up to about a pixel off.
+/// Treating that as equal keeps a picture flush with its card instead of
+/// leaving a one-pixel seam.
+const SNAP_PX: f64 = 1.5;
+
+/// The size, in screen pixels, to draw a page picture (a snapshot) at, so a
+/// card being resized never stretches an old one (#479, moved here from the
+/// CEF crate in #826). `css_w` and `css_h` are the layout size the picture
+/// was taken at (0 when unknown), `scale` the canvas zoom (screen pixels per
+/// CSS pixel), `avail_w` and `avail_h` the page area of the card now. The
+/// picture is drawn at its layout size times the zoom, anchored top-left, so
+/// the card shows a page of the old size, clipped or with card background
+/// beside it, until a new picture replaces it. A canvas ZOOM is not a
+/// stretch: the layout size is unchanged, so a settled card fills exactly.
+/// Unknown layout size: the available size.
+pub fn frame_draw_size(
+    css_w: i32,
+    css_h: i32,
+    scale: f64,
+    avail_w: f64,
+    avail_h: f64,
+) -> (f64, f64) {
+    if css_w <= 0 || css_h <= 0 || scale <= 0. {
+        return (avail_w, avail_h);
+    }
+    let snap = |natural: f64, avail: f64| {
+        if (natural - avail).abs() <= SNAP_PX {
+            avail
+        } else {
+            natural
+        }
+    };
+    (
+        snap(css_w as f64 * scale, avail_w),
+        snap(css_h as f64 * scale, avail_h),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_settled_card_is_filled_exactly() {
+        assert_eq!(frame_draw_size(800, 600, 1., 800., 600.), (800., 600.));
+        // Fractional bounds a hair off the rounded layout size still fill.
+        assert_eq!(frame_draw_size(800, 600, 1., 800.4, 599.6), (800.4, 599.6));
+    }
+
+    #[test]
+    fn a_zoom_is_not_a_stretch() {
+        for z in [0.25, 0.5, 1., 1.5, 3.] {
+            assert_eq!(
+                frame_draw_size(800, 600, z, 800. * z, 600. * z),
+                (800. * z, 600. * z),
+                "zoom {z}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_dragged_wider_or_narrower_keeps_the_old_picture_size() {
+        assert_eq!(frame_draw_size(800, 600, 1., 1000., 600.), (800., 600.));
+        assert_eq!(frame_draw_size(800, 600, 1., 500., 400.), (800., 600.));
+    }
+
+    #[test]
+    fn the_natural_size_follows_the_zoom_during_a_resize() {
+        assert_eq!(frame_draw_size(800, 600, 0.5, 600., 300.), (400., 300.));
+    }
+
+    #[test]
+    fn a_picture_with_no_known_layout_fills_the_card() {
+        assert_eq!(frame_draw_size(0, 0, 1., 640., 480.), (640., 480.));
+        assert_eq!(frame_draw_size(800, 600, 0., 640., 480.), (640., 480.));
+    }
 
     #[test]
     fn a_download_keeps_the_proposed_name_when_the_path_is_free() {

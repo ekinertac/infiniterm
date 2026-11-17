@@ -307,17 +307,20 @@ impl AppView {
     /// sprite atlas here too: nothing else evicts a dead frame's tile
     /// (gpui has no atlas LRU), so a closed card would otherwise leave it
     /// allocated forever (`browser_body::BrowserBody::drop_texture`).
-    // Without the browser feature nothing in here touches the window or the
+    // Without the browser engine nothing in here touches the window or the
     // body being dropped: there is no atlas tile to evict.
-    #[cfg_attr(not(feature = "browser"), allow(unused_variables))]
+    #[cfg_attr(
+        not(all(feature = "browser", target_os = "macos")),
+        allow(unused_variables)
+    )]
     fn reconcile_bodies(&mut self, window: &mut Window) {
         let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
         self.bodies.retain(|id, body| {
             if ids.contains(id) {
                 return true;
             }
-            // Only a real CEF body ever put a frame in the atlas.
-            #[cfg(feature = "browser")]
+            // Only a real browser body ever put a snapshot in the atlas.
+            #[cfg(all(feature = "browser", target_os = "macos"))]
             if let Some(browser) = body
                 .as_any_mut()
                 .downcast_mut::<crate::browser_body::BrowserBody>()
@@ -743,7 +746,7 @@ impl AppView {
                         f32::from(b.size.height) as f64,
                     ]
                 });
-        #[cfg(feature = "browser")]
+        #[cfg(all(feature = "browser", target_os = "macos"))]
         crate::page_surface::begin_frame();
         for card in &cards {
             let rect = self.drawn_rect(&card.id, card.rect, now);
@@ -984,7 +987,7 @@ impl AppView {
             }
         }
         // A native page no card placed this frame goes away with its card.
-        #[cfg(feature = "browser")]
+        #[cfg(all(feature = "browser", target_os = "macos"))]
         crate::page_surface::end_frame();
 
         // The ghost: an outline where the dragged card would land, in the

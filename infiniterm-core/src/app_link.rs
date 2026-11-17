@@ -5,19 +5,19 @@
 //! Slack's magic login is the usual case: the web page signs you in, then
 //! sends the browser to a `slack://` address.
 //!
-//! This file is the decision and the words for it, with no CEF and no gpui:
-//! which addresses are app links, what the prompt says, and how one is
-//! opened. The browser crate queues each one (`Shared::external_links`), the
+//! This file is the decision and the words for it, with no web view and no
+//! gpui: which addresses are app links, what the prompt says, and how one is
+//! opened. The web view queues each one (`webview.rs`, `external_links`), the
 //! ui asks first (`Pending::OpenAppLink`, because a page may redirect to an
 //! app without a click, as Chrome's "Open Slack?" guards), and `links_fs::
 //! open_app_link` hands it to macOS only after a yes.
 //!
-//! Related: infiniterm-browser/src/surface.rs (the protocol handler),
+//! Related: infiniterm-ui/src/webview.rs (the navigation handler),
 //! links_fs.rs (opening), model/cards_cmd.rs (the answer).
 
 /// Schemes a browser card shows itself, or that are not another app's: a
-/// link with one of these is never an app link. `infiniterm` is the card's own
-/// page scheme (`app_protocol`), not an app to open.
+/// link with one of these is never an app link. `infiniterm` is reserved as
+/// the card's own scheme, not an app to open (nothing serves it today).
 const IN_CARD: &[&str] = &[
     "http",
     "https",

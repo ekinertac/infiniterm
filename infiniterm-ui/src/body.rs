@@ -1,7 +1,7 @@
 //! What a card draws inside its frame. The trait the mapping asks for: the
 //! model knows a card as a rect, an id and a kind, and the body is the one
 //! thing that knows how to paint and take input. The terminal grid
-//! (`terminal_body.rs`), the editor, the CEF surface and, later, a Wayland
+//! (`terminal_body.rs`), the editor, the browser page and, later, a Wayland
 //! surface all implement it. `Blank` stands in for the kinds not built yet.
 use gpui::{fill, App, Bounds, Hsla, Keystroke, Pixels, Window};
 use infiniterm_core::grid::{Point, Size};

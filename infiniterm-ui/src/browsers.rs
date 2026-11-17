@@ -1,27 +1,26 @@
 //! Browser cards and their surfaces: one `BrowserBody` per browser card,
-//! holding one CEF surface per tab, opened on the card's url at the card's
-//! size and kept in step each frame (new pixels, the page's own zoom from
+//! holding one web view per tab, opened on the card's url at the card's
+//! size and kept in step each frame (new snapshots, the page's own zoom from
 //! `card.zoom`, a url typed into `browser.navigate`, and `card.tabs`
 //! against the body's own list), with what the page did written back: the
 //! address it moved to onto the card, popups opened as TABS on the same
 //! card, a right-click turned into the slim menu overlay, the page's own
 //! focus mirrored onto `card.locked`. A tab command is plain `Card`
 //! mutation in `tabs_cmd.rs` with no `Effect` behind it, so the diff here
-//! is the whole of how one becomes a surface. CEF itself is started once
-//! in `main.rs`; `cef_running` says whether it is.
+//! is the whole of how one becomes a surface. Compiled on macOS only; the
+//! stand-in elsewhere is `browser_stub.rs`.
 use crate::browser_body::BrowserBody;
 use crate::page_surface::Engine;
 use crate::tab_strip::strip_style;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::{Point, Size};
-use infiniterm_core::ift::OpenPlan;
 use infiniterm_core::model::{BrowserAction, FindRequest};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::viewport::screen_pos_of;
 
 /// A page's right-click, waiting for the main loop to open its menu
 /// (`menus.rs::open_page_menu`): where it happened, in content-area screen
-/// pixels, and what Chromium said was under it. The menu itself is the tab
+/// pixels, and what the page said was under it. The menu itself is the tab
 /// strip's (`context_menu.rs`, #625); this only carries the click there.
 pub struct CardContextMenu {
     pub card_id: String,
@@ -92,23 +91,15 @@ fn diff_removed_index(old: &[String], new: &[String]) -> Option<usize> {
     )
 }
 
-/// The engine a card made now opens with: `browser.engine`, where the
-/// system web view exists. Its data store is named after THIS instance's
-/// data dir (`INFINITERM_DATA_DIR` for a scratch one), never the global
-/// default store, so a scratch instance cannot touch the real sign-ins.
-fn browser_engine(setting: infiniterm_core::config::BrowserEngine, devtools: bool) -> Engine {
-    use infiniterm_core::config::BrowserEngine;
-    // No log line for "webview" off macOS: it is the default, so it would
-    // fire on every machine that never set the key.
-    match setting.effective() {
-        BrowserEngine::Cef => Engine::Cef,
-        BrowserEngine::Webview => {
-            let dir = infiniterm_core::paths::app_support_dir();
-            Engine::Webview {
-                store: infiniterm_core::webview_policy::store_identifier(&dir.to_string_lossy()),
-                devtools,
-            }
-        }
+/// What a card made now opens its pages with. The data store is named after
+/// THIS instance's data dir (`INFINITERM_DATA_DIR` for a scratch one), never
+/// the global default store, so a scratch instance cannot touch the real
+/// sign-ins.
+fn browser_engine(devtools: bool) -> Engine {
+    let dir = infiniterm_core::paths::app_support_dir();
+    Engine {
+        store: infiniterm_core::webview_policy::store_identifier(&dir.to_string_lossy()),
+        devtools,
     }
 }
 
@@ -150,8 +141,6 @@ impl AppView {
             });
             self.redraw = true;
         }
-        let cef = self.cef_running;
-        let scale = self.scale_factor;
         let card_bg = self.chrome.card_bg;
         let text = self.chrome.text;
         // The same `StripStyle` the editor's strip takes, so the two look
@@ -160,10 +149,7 @@ impl AppView {
         let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
-        let engine = browser_engine(
-            self.model.config.browser.engine,
-            self.model.config.browser.devtools,
-        );
+        let engine = browser_engine(self.model.config.browser.devtools);
         // A tab dropped in a strip (#682) becomes the model's move first,
         // so the card below already carries the new order.
         let ids: Vec<String> = self
@@ -203,7 +189,7 @@ impl AppView {
         let mut retabs: Vec<(String, Vec<String>)> = vec![];
         let mut locks: Vec<(String, bool)> = vec![];
         let mut page_titles: Vec<(String, Option<String>)> = vec![];
-        let mut menu: Option<(String, Point, infiniterm_browser::ContextMenuRequest)> = None;
+        let mut menu: Option<(String, Point, crate::page_surface::ContextMenuRequest)> = None;
         for card in cards {
             let world = Size {
                 w: card.rect.w,
@@ -215,18 +201,10 @@ impl AppView {
                 // A restored card arrives with every tab it was saved with,
                 // so the body is built holding all of them. `tab_diff` would
                 // rebuild it into the same shape a frame later anyway; doing
-                // it here is a CEF browser opened and closed for nothing on
+                // it here is a web view opened and closed for nothing on
                 // every restored card, saved.
                 let first = card.tabs.first().unwrap_or(&url);
-                let mut body = BrowserBody::with_engine(
-                    &card.id,
-                    first,
-                    world,
-                    scale,
-                    cef,
-                    style.clone(),
-                    engine,
-                );
+                let mut body = BrowserBody::new(&card.id, first, world, style.clone(), engine);
                 for later in card.tabs.iter().skip(1) {
                     body.open_tab(later);
                 }
@@ -355,9 +333,9 @@ impl AppView {
                 editable: request.editable,
                 has_selection: request.has_selection,
             });
-            // A webview page's right-click was swallowed before gpui saw it,
-            // so no input event follows to ask for a frame (a CEF page's
-            // click reaches gpui first): the menu has to ask for its own.
+            // A web view's right-click was swallowed before gpui saw it, so
+            // no input event follows to ask for a frame: the menu has to ask
+            // for its own.
             self.redraw = true;
         }
         for (id, urls) in retabs {
@@ -468,48 +446,13 @@ impl AppView {
         }
     }
 
-    /// DevTools for a browser card: the debugging port serves Chromium's
-    /// own DevTools page, and an ordinary browser card beside the page's
-    /// shows it (CEF's windowless DevTools does not exist, see
-    /// `infiniterm_core::devtools`). The target id is the one the surface
-    /// read after its last load.
-    fn open_devtools(&mut self, card_id: &str) {
-        // A webview page has no debugging port: its inspector is Safari's.
-        let native = self
-            .bodies
-            .get_mut(card_id)
-            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
-            .and_then(|body| body.active_surface())
-            .is_some_and(|s| s.is_native());
-        if native {
-            self.model
-                .notify(infiniterm_core::webview_policy::NATIVE_DEVTOOLS_NOTE);
-            return;
-        }
-        let Some(port) = infiniterm_browser::process::devtools_port() else {
-            self.model
-                .notify("DevTools has no port: it is off, or none was free; restart the app");
-            return;
-        };
-        let target = self
-            .bodies
-            .get_mut(card_id)
-            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
-            .and_then(|body| body.active_surface())
-            .and_then(|surface| surface.target_id());
-        let Some(target) = target else {
-            self.model
-                .notify("the page is still loading: try again in a moment");
-            return;
-        };
-        let cwd = self
-            .model
-            .card(card_id)
-            .map(|c| c.cwd.clone())
-            .unwrap_or_default();
-        let url = infiniterm_core::devtools::frontend_url(port, &target);
+    /// DevTools for a browser card. WebKit's inspector is Safari's: wry's own
+    /// `open_devtools` docks it and takes over the whole window (the spike),
+    /// so the page is made inspectable (`browser.devtools`) and this says how
+    /// to reach it.
+    fn open_devtools(&mut self, _card_id: &str) {
         self.model
-            .open_in_card(OpenPlan::Browser { cwd, url }, Some(card_id));
+            .notify(infiniterm_core::webview_policy::NATIVE_DEVTOOLS_NOTE);
     }
 
     /// The mouse's back and forward buttons, over a browser page. Back on a
@@ -562,35 +505,28 @@ impl AppView {
         }
     }
 
-    /// The OS cursor follows whichever browser card the pointer is over
-    /// (a pointer over a link, an I-beam over an input), the way it would
-    /// in a real browser tab. Anything else hovered, or nothing, keeps the
-    /// arrow: nothing else in the app sets a cursor style, so this is
-    /// decided fresh every frame rather than left to whatever gpui reset
-    /// to on its own.
+    /// The window cursor for the card the pointer is over, when that card
+    /// sets one itself (an editor's tree divider, a terminal link under
+    /// Cmd).
     ///
     /// gpui gives a WINDOW-level cursor precedence over every element's own
     /// (`cursor_pointer` on a row), so asking for the arrow every frame, as
     /// this once did, made every pointer in the palette, the dialogs and the
-    /// tabs a no-op (#256). It now asks only when the pointer is over a
-    /// browser page and no overlay is up; everywhere else the elements
-    /// decide, and gpui's default is the arrow.
+    /// tabs a no-op (#256). It now asks only when a body has one to give and
+    /// no overlay is up; everywhere else the elements decide, and gpui's
+    /// default is the arrow.
     pub fn apply_hover_cursor(&mut self, window: &mut gpui::Window) {
         if self.model.modal_open() {
             return;
         }
         let hover = self.hover_body.clone();
+        // The web view's own cursor (a pointer over a link, an I-beam over an
+        // input) is set by AppKit on its native view, so a browser page is not
+        // asked here.
         let style = hover
             .as_ref()
-            .and_then(|id| self.browser_for(id))
-            .map(|b| b.cursor_style())
-            .or_else(|| {
-                // An editor's tree divider: the resize cursor (#258).
-                hover
-                    .as_ref()
-                    .and_then(|id| self.editor_tabs_for(id))
-                    .and_then(|t| t.divider_cursor())
-            })
+            .and_then(|id| self.editor_tabs_for(id))
+            .and_then(|t| t.divider_cursor())
             .or_else(|| {
                 // Cmd over a link in a terminal: the hand, as over a page's.
                 let id = hover.as_ref()?;
@@ -603,8 +539,7 @@ impl AppView {
         }
     }
 
-    /// Chromium reports a find's progress several times per search; the
-    /// model takes whatever arrived by this frame.
+    /// The model takes whatever find result arrived by this frame.
     pub fn drain_find(&mut self) {
         let Some(card_id) = self.model.find.card_id.clone() else {
             return;

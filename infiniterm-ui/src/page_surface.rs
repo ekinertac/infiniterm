@@ -1,37 +1,88 @@
-//! What a browser card's tab needs from the thing that shows its page, so the
-//! card (`browser_body.rs`) and the model glue (`browsers.rs`) do not care
-//! whether the page is a CEF browser painted into a texture or the system's
-//! own web view (WKWebView, `webview.rs`) floating above the canvas. #761.
+//! What a browser card's tab needs from the thing that shows its page, and the
+//! plain types that cross between the two: the card (`browser_body.rs`) and
+//! the model glue (`browsers.rs`) talk to a `PageSurface`, and the only one is
+//! the system's own web view (WKWebView, `webview.rs`) floating above the
+//! canvas. #761, #826.
 //!
-//! The seam is narrow on purpose. `infiniterm_browser::Surface` implements
-//! the trait by forwarding every call to its own method, so the CEF path does
-//! exactly what it did; the methods only the texture engine needs (frames,
-//! mouse, keys, kick) have do-nothing defaults the web view takes as they are,
-//! because its native view gets those events from AppKit itself. The one
-//! method only the web view fills is `place`: where, how zoomed, and in what
-//! state its native view is this frame.
+//! Why a trait with one implementor: CEF used to be the other one and was
+//! removed in #826; the trait stayed because the card and the glue are
+//! written against it and it is where a WebView2 or WebKitGTK engine will
+//! plug in on Windows and Linux. Collapse it into `WebSurface` if that does
+//! not happen. The methods the web view does not need have do-nothing
+//! defaults: its native view gets frames, mouse and keys from AppKit itself.
 //!
 //! Where it fits: `browser_body.rs` holds a `Box<dyn PageSurface>` per tab;
-//! `Engine` says which kind a card opens (`browser.engine`);
+//! `Engine` carries what a new page needs (its data store);
 //! `infiniterm_core::webview_policy` holds the rules `place` is handed the
 //! results of. Related: `webview.rs`, `browsers.rs`.
 //! Constraint: everything here runs on the UI thread, so no `Send`.
 use gpui::Window;
-use infiniterm_browser::{Button, ContextMenuRequest, Frame, Mods, Surface};
 use std::sync::Arc;
 
-/// Which engine a card's tabs open with.
+/// Whether `INFINITERM_KEYLOG` is set: the log lines of the browser card and
+/// of the web view's input monitor.
+pub fn keylog() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("INFINITERM_KEYLOG").is_some())
+}
+
+/// What a card's tabs are opened with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Engine {
-    Cef,
-    /// The system web view. The identifier names its data store
-    /// (`webview_policy::store_identifier`).
-    Webview {
-        store: [u8; 16],
-        /// `browser.devtools`: make the page inspectable from Safari's
-        /// Develop menu.
-        devtools: bool,
-    },
+pub struct Engine {
+    /// Names the web view's data store (`webview_policy::store_identifier`).
+    pub store: [u8; 16],
+    /// `browser.devtools`: make the page inspectable from Safari's Develop
+    /// menu.
+    pub devtools: bool,
+}
+
+/// One picture of a page: BGRA, `width * height * 4` bytes, the byte order
+/// gpui keeps images in. The web view's snapshot (`webview.rs`) is the only
+/// source.
+pub struct Frame {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
+    /// The layout size (CSS pixels) the page had when the picture was taken:
+    /// not what the card wants now. The ui draws an old picture at its
+    /// natural size while a resize goes on, instead of stretching it to the
+    /// new card (#479, `webview_policy::frame_draw_size`).
+    pub css_width: i32,
+    pub css_height: i32,
+}
+
+/// A right-click, in page pixels, and enough of what it landed on for the
+/// card's menu (`menus.rs` decides what to show).
+#[derive(Clone, Debug)]
+pub struct ContextMenuRequest {
+    pub x: i32,
+    pub y: i32,
+    pub link_url: Option<String>,
+    pub editable: bool,
+    pub has_selection: bool,
+    /// The page's history, so the menu offers Back and Forward only when
+    /// there is somewhere to go.
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// The page's own address, for "open in the system browser".
+    pub page_url: String,
+}
+
+/// Modifier keys of a click, as the page sees them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mods {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+    /// Cmd: with it a clicked link opens in a new tab.
+    pub command: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Left,
+    Middle,
+    Right,
 }
 
 /// Where and in what state the native view is for one frame. Window pixels,
@@ -74,9 +125,7 @@ pub trait PageSurface {
     fn stop_find(&self);
     /// (matches, which one is current), zero matches for none.
     fn find_result(&self) -> (i32, i32);
-    /// The device scale last given to `resize`.
-    fn device_scale(&self) -> f32;
-    fn resize(&self, width: i32, height: i32, scale: f32);
+    fn resize(&self, width: i32, height: i32);
     fn take_popups(&self) -> Vec<String>;
     fn take_close_request(&self) -> bool;
     fn take_external_links(&self) -> Vec<String>;
@@ -88,12 +137,6 @@ pub trait PageSurface {
     fn edit_chord(&self, key: &str, shift: bool) -> bool;
     fn set_zoom(&self, factor: f64);
 
-    /// CEF's page id on its debugging port; the web view has none.
-    fn target_id(&self) -> Option<String> {
-        None
-    }
-    /// CEF asked to paint again (`frame_fit::needs_kick`).
-    fn kick(&self) {}
     fn has_new_frame(&self) -> bool {
         false
     }
@@ -102,18 +145,14 @@ pub trait PageSurface {
     fn wants_frame(&self, _now_ms: f64) -> bool {
         false
     }
-    /// New pixels: a CEF frame, or the web view's newest snapshot.
+    /// The web view's newest snapshot, if a new one arrived.
     fn take_frame(&self) -> Option<Arc<Frame>> {
         None
     }
-    fn cursor(&self) -> &'static str {
-        "default"
-    }
-    fn mouse_move(&self, _x: f32, _y: f32, _mods: Mods, _held: Option<Button>) {}
-    fn mouse_leave(&self) {}
+    /// A click on a page the card forwards (the card's mouse path calls it
+    /// for every press and release over the page; the web view uses the
+    /// release-free press for Cmd+click and middle-click).
     fn mouse_button(&self, _x: f32, _y: f32, _mods: Mods, _b: Button, _up: bool, _clicks: usize) {}
-    fn wheel(&self, _x: f32, _y: f32, _mods: Mods, _dx: f32, _dy: f32) {}
-    fn key(&self, _name: &str, _text: Option<&str>, _mods: Mods) {}
 
     /// Whether this page is a native view the card has to place each frame.
     fn is_native(&self) -> bool {
@@ -130,7 +169,7 @@ pub trait PageSurface {
         vec![]
     }
     /// A click reached the page of a card that had the focus but not the
-    /// lock (so the card locks, as a click that reaches a CEF page does).
+    /// lock (so the card locks).
     fn take_page_click(&self) -> bool {
         false
     }
@@ -140,105 +179,8 @@ pub trait PageSurface {
     fn hide(&self) {}
 }
 
-impl PageSurface for Surface {
-    fn navigate(&self, url: &str) {
-        Surface::navigate(self, url)
-    }
-    fn back(&self) {
-        Surface::back(self)
-    }
-    fn forward(&self) {
-        Surface::forward(self)
-    }
-    fn can_go_back(&self) -> bool {
-        Surface::can_go_back(self)
-    }
-    fn can_go_forward(&self) -> bool {
-        Surface::can_go_forward(self)
-    }
-    fn reload(&self) {
-        Surface::reload(self)
-    }
-    fn find(&self, text: &str, forward: bool, next: bool) {
-        Surface::find(self, text, forward, next)
-    }
-    fn stop_find(&self) {
-        Surface::stop_find(self)
-    }
-    fn find_result(&self) -> (i32, i32) {
-        Surface::find_result(self)
-    }
-    fn device_scale(&self) -> f32 {
-        self.shared.borrow().scale
-    }
-    fn resize(&self, width: i32, height: i32, scale: f32) {
-        Surface::resize(self, width, height, scale)
-    }
-    fn take_popups(&self) -> Vec<String> {
-        Surface::take_popups(self)
-    }
-    fn take_close_request(&self) -> bool {
-        Surface::take_close_request(self)
-    }
-    fn take_external_links(&self) -> Vec<String> {
-        Surface::take_external_links(self)
-    }
-    fn take_context_menu(&self) -> Option<ContextMenuRequest> {
-        Surface::take_context_menu(self)
-    }
-    fn title(&self) -> Option<String> {
-        Surface::title(self)
-    }
-    fn url(&self) -> Option<String> {
-        Surface::url(self)
-    }
-    fn close(&self) {
-        Surface::close(self)
-    }
-    fn focus(&self, on: bool) {
-        Surface::focus(self, on)
-    }
-    fn edit_chord(&self, key: &str, shift: bool) -> bool {
-        Surface::edit_chord(self, key, shift)
-    }
-    fn set_zoom(&self, factor: f64) {
-        Surface::set_zoom(self, factor)
-    }
-    fn target_id(&self) -> Option<String> {
-        Surface::target_id(self)
-    }
-    fn kick(&self) {
-        Surface::kick(self)
-    }
-    fn has_new_frame(&self) -> bool {
-        Surface::has_new_frame(self)
-    }
-    fn take_frame(&self) -> Option<Arc<Frame>> {
-        Surface::take_frame(self)
-    }
-    fn cursor(&self) -> &'static str {
-        Surface::cursor(self)
-    }
-    fn mouse_move(&self, x: f32, y: f32, mods: Mods, held: Option<Button>) {
-        Surface::mouse_move(self, x, y, mods, held)
-    }
-    fn mouse_leave(&self) {
-        Surface::mouse_leave(self)
-    }
-    fn mouse_button(&self, x: f32, y: f32, mods: Mods, b: Button, up: bool, clicks: usize) {
-        Surface::mouse_button(self, x, y, mods, b, up, clicks)
-    }
-    fn wheel(&self, x: f32, y: f32, mods: Mods, dx: f32, dy: f32) {
-        Surface::wheel(self, x, y, mods, dx, dy)
-    }
-    fn key(&self, name: &str, text: Option<&str>, mods: Mods) {
-        Surface::key(self, name, text, mods)
-    }
-}
-
 /// Start of a frame: every native page is marked not placed.
 pub fn begin_frame() {
-    #[cfg(target_os = "macos")]
     crate::webview::begin_frame();
 }
 
@@ -246,6 +188,5 @@ pub fn begin_frame() {
 /// on another workspace, or gone) is hidden, because a native view stays
 /// where it was left.
 pub fn end_frame() {
-    #[cfg(target_os = "macos")]
     crate::webview::end_frame();
 }

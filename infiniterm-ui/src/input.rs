@@ -324,7 +324,7 @@ impl AppView {
             MouseButton::Middle => 1,
             // Never pans (`starts_pan` only fires for 0 and 1): a right
             // click still needs the hit test below, to reach the browser
-            // card and let CEF ask for its slim menu.
+            // card and let the web view's menu open.
             MouseButton::Right => 2,
             _ => return,
         };

@@ -2,6 +2,10 @@
 
 For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), starting from nothing but this repo. Written 2026-09-23 on the Mac by the session that built most of the tree. Read `CLAUDE.md` first: it holds the rules and the traps, and most of them still apply. This file is only what is different about Windows.
 
+## CEF is gone (2026-11-17, #826): read this before the CEF sections below
+
+Every CEF paragraph in this file is history. The browser card on the Mac is the system web view now, and CEF was deleted: `infiniterm-browser/`, the helper binary, `.cargo/config.toml` (`CEF_PATH`), `tools/drive/win/cef-env.ps1`, and the CEF parts of `tools/dist.ps1` (it builds the default features and ships the three exes and the themes; `-NoBrowser` is accepted and ignored). Windows has no browser engine: a browser card draws `browser_stub.rs` ("Browser cards are not available on this system yet."), and the `browser` feature compiles the same stub off macOS. The next step is a WebView2 engine behind `page_surface::PageSurface` (the trait the Mac's `webview.rs` implements); WebView2 is a system component on Windows 11, so it should add no bundle weight. Left alone on purpose, for you to decide: `job::adopt_this_process` and the quit path at the close of the window in `main.rs` (written because Chromium's subprocesses outlived the app and `shutdown()` hung; with no Chromium the job may be unnecessary), and the CEF-specific scripts `tools/drive/win/window.ps1`, `kill.ps1`, `run.ps1` and `app-shot.ps1`.
+
 ## Merged with master, 2026-10-21
 
 The port was merged with master (about 750 commits since it forked at

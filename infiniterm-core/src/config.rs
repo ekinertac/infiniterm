@@ -240,37 +240,6 @@ pub enum TerminalBackend {
     Daemon,
 }
 
-/// Which engine draws a browser card (`browser.engine`, #761, #826).
-/// `Webview` is the default: the system's own web view (WKWebView), which
-/// exists on macOS only. `Cef` is Chromium, still the only engine on Linux
-/// and Windows, and on the Mac only when the setting says `cef`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BrowserEngine {
-    Cef,
-    Webview,
-}
-
-impl BrowserEngine {
-    /// The engine that really runs: `webview` asked for on a system with no
-    /// such engine is `cef`, and the caller says so in a log line.
-    pub fn effective(self) -> BrowserEngine {
-        if self == BrowserEngine::Webview && !cfg!(target_os = "macos") {
-            BrowserEngine::Cef
-        } else {
-            self
-        }
-    }
-
-    /// Whether the app starts CEF at launch (a framework load, helper
-    /// processes and a message pump: about 300 MB and a wake-up every few
-    /// milliseconds). Only for the engine that needs it, so a Mac on the
-    /// default runs no CEF at all.
-    pub fn starts_cef(self) -> bool {
-        self.effective() == BrowserEngine::Cef
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cards {
@@ -416,16 +385,10 @@ pub struct Browser {
     /// default: it is the only thing in this app that talks to anything but
     /// the page you asked for.
     pub suggestions: bool,
-    /// Opens CEF's debugging port on a random loopback port at launch, which
-    /// the DevTools command needs (read at launch: CEF cannot open or close
-    /// the port later). ON by default (Ekin, 2026-10-09): easier to use, and
-    /// the port takes connections only from our own frontend's origin.
+    /// Makes a page inspectable from Safari's Develop menu (WebKit's own
+    /// inspector). ON by default (Ekin, 2026-10-09). Read when a page is
+    /// created.
     pub devtools: bool,
-    /// The engine browser cards use: `webview` (default, macOS only) or
-    /// `cef`. Read when a browser card is created, so a card already open
-    /// keeps its engine until it is closed and reopened. CEF itself starts
-    /// at launch only when this says `cef` (the app reads it before gpui).
-    pub engine: BrowserEngine,
     /// EXTRA tab-to-search sites, added to the nine built in. Empty in the
     /// defaults file, so nobody has to scroll past a list they did not
     /// write; `Config::engines` is what the omnibox actually reads.
@@ -748,7 +711,6 @@ pub fn default_config() -> Config {
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
             suggestions: false,
             devtools: true,
-            engine: BrowserEngine::Webview,
             engines: vec![],
         },
         ui: Ui {
@@ -1180,14 +1142,6 @@ pub fn merge_config(raw: &Value) -> Config {
             },
             suggestions: bool_(b.get("suggestions"), d.browser.suggestions),
             devtools: bool_(b.get("devtools"), d.browser.devtools),
-            engine: one(
-                b.get("engine"),
-                d.browser.engine,
-                &[
-                    ("cef", BrowserEngine::Cef),
-                    ("webview", BrowserEngine::Webview),
-                ],
-            ),
             engines: b
                 .get("engines")
                 .and_then(Value::as_array)
@@ -1477,47 +1431,18 @@ mod tests {
         assert_eq!(m(json!({})), default_config());
     }
 
+    // #826: `browser.engine` was removed with CEF. A settings.json that
+    // still has it (flat or nested) must load as if the key were not there,
+    // and must stay valid, or the whole file would be refused.
     #[test]
-    fn the_browser_engine_defaults_to_webview_and_names_two_things() {
-        assert_eq!(default_config().browser.engine, BrowserEngine::Webview);
-        assert_eq!(
-            m(json!({"browser.engine": "webview"})).browser.engine,
-            BrowserEngine::Webview
-        );
-        assert_eq!(
-            m(json!({"browser": {"engine": "cef"}})).browser.engine,
-            BrowserEngine::Cef
-        );
-        // A typo falls back to the default, as the backend setting does.
-        assert_eq!(
-            m(json!({"browser.engine": "chrome"})).browser.engine,
-            default_config().browser.engine
-        );
-    }
-
-    #[test]
-    fn the_webview_engine_is_cef_where_there_is_no_webview_engine() {
-        assert_eq!(BrowserEngine::Cef.effective(), BrowserEngine::Cef);
-        let want = if cfg!(target_os = "macos") {
-            BrowserEngine::Webview
-        } else {
-            BrowserEngine::Cef
-        };
-        assert_eq!(BrowserEngine::Webview.effective(), want);
-    }
-
-    #[test]
-    fn cef_starts_only_for_the_cef_engine_on_the_mac() {
-        assert!(BrowserEngine::Cef.starts_cef());
-        // The default engine: no CEF on the Mac, CEF where it is the only one.
-        assert_eq!(
-            default_config().browser.engine.starts_cef(),
-            !cfg!(target_os = "macos")
-        );
-        assert!(m(json!({"browser.engine": "cef"}))
-            .browser
-            .engine
-            .starts_cef());
+    fn a_leftover_browser_engine_key_is_ignored_and_stays_valid() {
+        for raw in [
+            json!({"browser.engine": "cef"}),
+            json!({"browser": {"engine": "webview"}}),
+        ] {
+            assert_eq!(m(raw.clone()), default_config());
+            assert_eq!(crate::model::settings_in::validate_settings(&raw), Ok(()));
+        }
     }
 
     #[test]
