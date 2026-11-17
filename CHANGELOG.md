@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-17
 
+- Fixed: while you zoom the canvas, a browser card's page now keeps up with its border. Before, zooming in left the page drawn small in the card's top-left corner for a moment before it filled the card. During a zoom the card shows a picture of the page, and the live page is back a moment after you stop.
 - Fixed: a locked browser card in the fit-all view (Cmd+2, or any zoom far enough out that the page shows as a picture) now unlocks with Escape twice, and the app's keys work there again. Before, those keys went nowhere until you clicked another card.
 
 ## 0.6.17 (build 1753), 2026-11-17

@@ -42,6 +42,36 @@ pub struct PageState {
     /// Partial covers are not this: they are holes in the live page
     /// (`holes_of`), which keeps it playing and scrolling.
     pub fully_covered: bool,
+    /// The canvas is zooming (`zoom_settling`): WebKit re-renders a new page
+    /// zoom some frames after the view has its new size, so a live page
+    /// trailed its border, smaller than the card while zooming in (#839).
+    /// The picture is scaled by gpui in the same frame as the border.
+    pub zooming: bool,
+}
+
+/// How long after the page zoom last changed the page stays a picture. A
+/// trackpad zoom sends a change every frame; this bridges the gaps between
+/// them so the page does not flicker live mid-gesture. Measured in #839:
+/// WebKit took about 7 frames (115 ms) to re-render after a zoom step.
+pub const ZOOM_SETTLE_MS: f64 = 150.;
+
+/// When the page zoom last changed, given the zoom of the last frame
+/// (`None` on the first one, which is a placement, not a zoom).
+pub fn zoom_changed_at(
+    last_zoom: Option<f64>,
+    zoom: f64,
+    changed_at: Option<f64>,
+    now: f64,
+) -> Option<f64> {
+    match last_zoom {
+        Some(z) if z != zoom => Some(now),
+        _ => changed_at,
+    }
+}
+
+/// Whether a zoom that changed at `changed_at` is still going on.
+pub fn zoom_settling(changed_at: Option<f64>, now: f64) -> bool {
+    changed_at.is_some_and(|t| now - t < ZOOM_SETTLE_MS)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,7 +87,7 @@ pub enum PageView {
 /// as holes (`holes_of`); only a page that cannot be shown at this zoom, or
 /// that one cover hides entirely, is swapped for its picture.
 pub fn page_view(s: &PageState) -> PageView {
-    if s.zoom < FAR_ZOOM || s.fully_covered {
+    if s.zoom < FAR_ZOOM || s.fully_covered || s.zooming {
         PageView::Snapshot
     } else {
         PageView::Live
@@ -750,7 +780,33 @@ mod tests {
         PageState {
             zoom,
             fully_covered,
+            zooming: false,
         }
+    }
+
+    #[test]
+    fn a_zooming_canvas_shows_the_picture() {
+        let zooming = PageState {
+            zooming: true,
+            ..state(1., false)
+        };
+        assert_eq!(page_view(&zooming), PageView::Snapshot);
+    }
+
+    #[test]
+    fn a_zoom_change_is_stamped_and_settles_after_the_quiet_time() {
+        // The first frame places the page; it is not a zoom.
+        assert_eq!(zoom_changed_at(None, 1., None, 1000.), None);
+        assert_eq!(zoom_changed_at(Some(1.), 1., None, 1000.), None);
+        assert_eq!(zoom_changed_at(Some(1.), 1.2, None, 1000.), Some(1000.));
+        // An unchanged frame keeps the last stamp.
+        assert_eq!(
+            zoom_changed_at(Some(1.2), 1.2, Some(1000.), 1016.),
+            Some(1000.)
+        );
+        assert!(zoom_settling(Some(1000.), 1000. + ZOOM_SETTLE_MS - 1.));
+        assert!(!zoom_settling(Some(1000.), 1000. + ZOOM_SETTLE_MS));
+        assert!(!zoom_settling(None, 1000.));
     }
 
     #[test]
