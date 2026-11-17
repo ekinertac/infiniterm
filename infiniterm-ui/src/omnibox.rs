@@ -478,8 +478,8 @@ impl AppView {
         } else if matches == 0 {
             "no matches".to_string()
         } else if active == 0 {
-            // Chromium reports the active match as 0 until it has selected
-            // one, which is every new search; "0/2" reads like a failure.
+            // The active match is 0 until one is selected, which is every
+            // new search; "0/2" reads like a failure.
             format!("{matches} match{}", if matches == 1 { "" } else { "es" })
         } else {
             format!("{active}/{matches}")

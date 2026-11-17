@@ -11,7 +11,7 @@
 //! Off macOS there is no `NSMenu` (#464): the same rows open as
 //! `Model::menu`, drawn by `menu_view.rs` and walked with `menu_nav.rs`, and
 //! `close_menu` runs the choice. Both paths end in `finish_menu`. A browser
-//! page's right-click comes in from Chromium (`browsers.rs`) and opens the
+//! page's right-click comes in from the web view (`browsers.rs`) and opens the
 //! tab strip's menu with what it landed on added (`open_page_menu`, #625).
 //!
 //! Constraints: the Mac popup blocks and re-enters gpui, so it runs from a
@@ -111,7 +111,7 @@ impl AppView {
                         }
                     }
                     // A tab of the strip: its menu. A page's right-click is
-                    // Chromium's (browsers.rs).
+                    // the web view's (browsers.rs).
                     CardKind::Browser => {
                         let Some(tab) = self.browser_for(&id).and_then(|b| b.tab_at(local)) else {
                             return;
@@ -140,7 +140,7 @@ impl AppView {
     }
 
     /// A browser page's right-click, once the main loop picks the request up:
-    /// the same menu as the tab strip's, with the rows of what Chromium said
+    /// the same menu as the tab strip's, with the rows of what the page said
     /// was under the pointer. The click's card is the one the commands act
     /// on, and `page_hit` carries the link until the menu is gone.
     pub fn open_page_menu(&mut self, cx: &mut Context<Self>) {

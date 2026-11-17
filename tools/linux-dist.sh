@@ -19,8 +19,8 @@
 #
 #   tools/linux-dist.sh [target-dir]     default target/release
 #
-# No browser cards: the app is built without CEF on Linux for now
-# (docs/agent/linux-port.md).
+# No browser cards: there is no web view engine on Linux yet, so they show a
+# notice (docs/agent/linux-port.md).
 set -eu
 cd "$(dirname "$0")/.."
 

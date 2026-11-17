@@ -1,32 +1,31 @@
-//! The system web view as a browser card's page (`browser.engine` =
-//! `webview`, macOS only, #761): a WKWebView made with the `wry` crate as a
-//! subview of gpui's own view, placed over the card's page area every frame.
+//! The system web view as a browser card's page (macOS only, #761, the only
+//! engine since #826): a WKWebView made with the `wry` crate as a subview of
+//! gpui's own view, placed over the card's page area every frame.
 //!
-//! How it differs from the CEF page: CEF paints into a texture gpui draws, so
-//! the page zooms, overlaps and dims like any card. A native view floats ABOVE
-//! everything gpui draws, so this engine (1) follows the card's rect and gives
-//! WebKit `pageZoom` for the canvas zoom, (2) swaps itself for a still picture
-//! (a snapshot, drawn by gpui through the same texture path CEF frames take)
-//! whenever the page cannot be shown live: far zoom, a card over it, a card
-//! being dragged, and (3) dims through a colour view above it, because the
-//! web view's own alpha does nothing. The rules for those choices are
-//! `infiniterm_core::webview_policy`; this file carries them out.
+//! A native view floats ABOVE everything gpui draws (unlike a page painted
+//! into a texture, which would zoom, overlap and dim like any card), so this
+//! engine (1) follows the card's rect and gives WebKit `pageZoom` for the
+//! canvas zoom, (2) swaps itself for a still picture (a snapshot, drawn by
+//! gpui as the tab's texture) whenever the page cannot be shown live: far
+//! zoom, a card over it, a card being dragged, and (3) dims through a colour
+//! view above it, because the web view's own alpha does nothing. The rules
+//! for those choices are `infiniterm_core::webview_policy`; this file carries
+//! them out.
 //!
 //! The snapshot is kept fresh while the page is live (`snapshot_due`), because
 //! it is asked for asynchronously and has to exist BEFORE the cover appears.
 //!
 //! Where it fits: `browser_body.rs` builds a `WebSurface` for a tab when the
-//! card's engine is `Engine::Webview`, calls `place` from `paint`, and takes
+//! card is made, calls `place` from `paint`, and takes
 //! the snapshot as the tab's texture. Created lazily in `place`, because
 //! wry needs the window and a tab is made before one is at hand.
 //! Related: `page_surface.rs` (the trait), the spike in PR #812 and its
 //! report for the measurements.
 //! Constraints: main thread only (AppKit and wry both require it); the
 //! per-instance data store is mandatory, never the global default store.
-use crate::page_surface::{PageSurface, Placement};
+use crate::page_surface::{Button, ContextMenuRequest, Frame, Mods, PageSurface, Placement};
 use block2::RcBlock;
 use gpui::Window;
-use infiniterm_browser::{Button, ContextMenuRequest, Frame, Mods};
 use infiniterm_core::webview_policy as policy;
 use objc2::{
     class, msg_send,
@@ -196,7 +195,7 @@ impl WebSurface {
         if items.is_empty() {
             return;
         }
-        if infiniterm_browser::surface::keylog() {
+        if crate::page_surface::keylog() {
             for item in &items {
                 match item {
                     Inbox::FindCount(raw) => eprintln!("[webview] find count answer {raw:?}"),
@@ -402,8 +401,7 @@ impl WebSurface {
     }
 }
 
-/// PNG bytes to a BGRA frame, the byte order gpui keeps images in (the same
-/// as CEF's frames, so the card draws both alike).
+/// PNG bytes to a BGRA frame, the byte order gpui keeps images in.
 pub fn png_to_frame(png: &[u8], css: (i32, i32)) -> Option<Frame> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)
         .ok()?
@@ -578,10 +576,7 @@ impl PageSurface for WebSurface {
         let s = self.core.shared.borrow();
         (s.find_count, s.find_active)
     }
-    fn device_scale(&self) -> f32 {
-        1.
-    }
-    fn resize(&self, width: i32, height: i32, _scale: f32) {
+    fn resize(&self, width: i32, height: i32) {
         self.core.state.borrow_mut().world = (width, height);
     }
     fn take_popups(&self) -> Vec<String> {
@@ -685,7 +680,7 @@ impl PageSurface for WebSurface {
     }
 
     // A Cmd+click, Cmd+Shift+click or middle-click on a link opens a tab, as
-    // in the Chromium card (#821). The press of such a click is the canvas's
+    // in Chrome (#821). The press of such a click is the canvas's
     // (a Cmd or middle drag pans); `input.rs` delivers it here only when it
     // was released without moving, so this is the click. WebKit says a
     // navigation was a Cmd click only through its delegate, which wry owns

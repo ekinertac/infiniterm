@@ -617,8 +617,8 @@ impl Render for AppView {
                             cx.notify();
                         }),
                     )
-                    // A browser card's own right-click menu (CEF asks for it
-                    // once the down and up both arrive); every other body
+                    // A browser card's own right-click menu (the page asks for
+                    // it once the down and up both arrive); every other body
                     // ignores the button, same as it always has.
                     .on_mouse_down(
                         MouseButton::Right,

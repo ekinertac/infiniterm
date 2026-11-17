@@ -488,22 +488,9 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "browser.devtools",
         &[
-            "Let a browser card open DevTools (the palette's Browser: open DevTools).",
-            "ON by default. It opens a debugging port on a random loopback port;",
-            "only our own DevTools page may connect to it, a web page cannot.",
-            "A program on this Mac can still attach to the port: turn it off if",
-            "that matters to you. Read at launch: restart after changing it.",
-        ],
-    ),
-    (
-        "browser.engine",
-        &[
-            "What draws a browser card: \"webview\" (the Mac's own WebKit, the default)",
-            "or \"cef\" (Chromium, which makes the app start it and use about 300 MB",
-            "more). Read at launch: restart after changing it. A card keeps the",
-            "engine it was opened with. The two keep their sign-ins and cookies",
-            "apart, so you sign in again once. Anywhere but macOS \"webview\" means",
-            "\"cef\", because Chromium is the only engine there.",
+            "Make a page in a browser card inspectable from Safari: turn on the",
+            "Develop menu in Safari's settings, then pick this Mac and the page.",
+            "ON by default. Read when a page is opened.",
         ],
     ),
     (

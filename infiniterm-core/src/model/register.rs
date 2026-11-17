@@ -5071,9 +5071,9 @@ mod tests {
         );
     }
 
-    // DevTools needs the debugging port, which the setting decides at
-    // launch: with the setting off the command says so instead of asking the
-    // ui for a port that was never opened.
+    // DevTools needs the page to be inspectable, which the setting decides
+    // when the page is made: with the setting off the command says so
+    // instead of asking the ui to open an inspector that cannot be reached.
     #[test]
     fn devtools_goes_to_the_page_s_card_and_says_when_it_is_off() {
         use crate::model::BrowserAction;

@@ -1,8 +1,9 @@
-//! What a browser card is in a build without CEF.
+//! What a browser card is where there is no web view engine: Windows and
+//! Linux (a WebView2 and a WebKitGTK engine do not exist yet, #826), and any
+//! build with the `browser` feature off.
 //!
-//! `infiniterm-ui`'s `browser` feature is on by default, so macOS is the tree
-//! as it was: `browsers.rs` reconciles real `BrowserBody` surfaces and
-//! `main.rs` starts CEF. With the feature off, `browsers.rs` and
+//! The engine is the system web view of macOS, so there `browsers.rs`
+//! reconciles real `BrowserBody` surfaces. Everywhere else `browsers.rs` and
 //! `browser_body.rs` are not compiled and THIS FILE IS COMPILED AS `browsers`
 //! instead (`#[path]` in main.rs). That is why it carries the same names for
 //! the same things: every call site in `input.rs`, `overlays.rs`, `paint.rs`
@@ -16,14 +17,15 @@
 //! build without the feature stops compiling until it appears here, which is
 //! the point.
 //!
-//! Two reasons the feature exists. Windows has no CEF build yet (phase 5 of
-//! docs/windows-handoff.md), and the Lite/Pro split planned in
-//! ekinertac/notes#50 wants exactly this shape: a build-time split with a
-//! stub card, not a runtime key.
+//! Two reasons the split exists. Windows and Linux have no engine yet, and
+//! the Lite/Pro split planned in ekinertac/notes#50 wants exactly this
+//! shape: a build-time split with a stub card, not a runtime key.
 //!
 //! A browser card is still a card here. It opens, it has a place on the
 //! canvas, it saves and restores with its url, and it says plainly what it
-//! is not. The day CEF is in the build it is a browser again.
+//! is not. `ift browse` and the palette open that card, so the one sentence
+//! is what a person reads. The day an engine exists for the system it is a
+//! browser again.
 //!
 //! Related: `body.rs` (the trait), `browsers.rs` and `browser_body.rs` (the
 //! real thing, and the `ift-browser` session's files), `paint.rs` (the
@@ -37,12 +39,12 @@ use infiniterm_core::model::{BrowserAction, FindRequest};
 use infiniterm_core::saved_layout::CardKind;
 
 /// Said plainly rather than hinting at a setting to turn on: there is none.
-const LINE: &str = "browser cards are not in this build";
+const LINE: &str = "Browser cards are not available on this system yet.";
 
 /// The real one carries where the right-click happened and what was under
 /// it. Nothing here ever builds one: a page has to exist to right-click on.
 /// It stays because `AppView::context_menu` is typed by it and the field is
-/// read in `input.rs` and `overlays.rs` without either knowing about CEF.
+/// read in `input.rs` and `overlays.rs` without either knowing about the engine.
 pub struct CardContextMenu {
     pub card_id: String,
     pub x: f64,
@@ -180,7 +182,7 @@ impl AppView {
         window.set_window_cursor_style(gpui::CursorStyle::Arrow);
     }
 
-    /// No Chromium, no find results to drain.
+    /// No web view, no find results to drain.
     pub fn drain_find(&mut self) {}
 
     /// A page's history, for the menu's Back and Forward rows. No page, none.

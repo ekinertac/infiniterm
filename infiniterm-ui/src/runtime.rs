@@ -156,7 +156,6 @@ impl AppView {
             menu_pending: None,
             background: Default::default(),
             scale_factor,
-            cef_running: false,
             reduce_motion: false,
             scheduler: Default::default(),
             ledger: Default::default(),
@@ -657,7 +656,7 @@ impl AppView {
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
                 // A terminal's scrollback is ours to search; a page is
-                // Chromium's (browsers.rs).
+                // the web view's (browsers.rs).
                 Effect::Find { card_id, request } => {
                     if self.terminal_body(&card_id).is_some() {
                         self.terminal_find(&card_id, request);
@@ -1510,24 +1509,6 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
     let value = infiniterm_core::jsonc::parse_jsonc(&text).unwrap_or(serde_json::Value::Null);
     let terminal = infiniterm_core::config::merge_config(&value).terminal;
     (terminal.backend, terminal.session_buffer as usize)
-}
-
-/// Whether the settings file asks for CEF, read straight from disk BEFORE
-/// gpui starts, because CEF is initialised before the app's model exists
-/// (#826). The same rules as `startup_terminal`: a missing or malformed file
-/// is the defaults. Off macOS it is always yes without reading anything, so a
-/// Windows helper process (this same exe) never touches the settings.
-#[cfg(feature = "browser")]
-pub fn startup_wants_cef() -> bool {
-    if !cfg!(target_os = "macos") {
-        return true;
-    }
-    let text = config_read(ConfigFile::Settings).unwrap_or_default();
-    let value = infiniterm_core::jsonc::parse_jsonc(&text).unwrap_or(serde_json::Value::Null);
-    infiniterm_core::config::merge_config(&value)
-        .browser
-        .engine
-        .starts_cef()
 }
 
 /// Opens the socket `ift join` viewers reach through ssh, and gives them the

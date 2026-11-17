@@ -1,6 +1,6 @@
 # Traps in the code
 
-What this covers: mistakes already made in the code, kept so they are not made again: sockets and threads, gpui, CEF and macOS behaviour, keys and text input, painting, menus and overlays, files and settings, replay and tmux.
+What this covers: mistakes already made in the code, kept so they are not made again: sockets and threads, gpui and macOS behaviour, keys and text input, painting, menus and overlays, files and settings, replay and tmux.
 
 Read it before touching the area a heading names. Each trap says what went wrong and what to do instead.
 
@@ -16,11 +16,9 @@ Moved here from CLAUDE.md's "Traps already hit" on 2026-10-19 with the text unch
 - The app inherits the environment of whatever launched it. Launched from a WezTerm shell, every card claimed to be a WezTerm pane. `local_pty.rs` removes the parent terminal's identity variables and sets `TERM_PROGRAM=infiniterm`, and `terminal_identity()` also sets `FORCE_HYPERLINK=1` (2026-10-09): Claude Code and the supports-hyperlinks package decide by terminal name, not by OSC 8, so without it a markdown link printed as `text (url)`. Only new cards get it; an open card keeps its environment.
 - `ift read` is answered from the 16 ms poll timer (`terminals.rs::answer_reads`), not in a frame: terminal output is parsed inside a frame, and a hidden window draws none, so a read there returned a stale or empty screen. `ift sessions` checks each socket's pid; a killed daemon leaves its files behind.
 
-## gpui, CEF and macOS
+## gpui and macOS
 
-- Both `cef` and `gpui` glob-export `App`, `Window`, `Point`, `MouseEvent`: import gpui by name.
-- CEF aborts on `isHandlingSendEvent` unless `app_protocol::install` runs before `initialize` (gpui owns the NSApplication subclass). A helper invocation must run `execute_process` and exit before gpui starts.
-- CEF reads native-messaging manifests from `<cache-path>/NativeMessagingHosts/` only. `navigator.userAgentData` exists only in secure contexts; never probe the moat on a `data:` URL.
+- (CEF's traps, removed with CEF in #826: the `isHandlingSendEvent` abort, the helper's `execute_process`, the native-messaging path and the Google moat. They are in git history if a Chromium engine ever returns.)
 - gpui's macOS view answers `mouseDragged:` but never registers `otherMouseDragged:`, so a middle-button press started a pan and no movement ever followed: middle-drag panning did nothing while Cmd+drag worked. `middle_drag.rs` adds the method at startup, pointing at `mouseDragged:`'s own implementation (gpui translates the event by its type and already maps middle drags to mouse moves).
 - gpui's `add_fonts` puts a font in its own memory source, which a `FontFallbacks` name never reaches: gpui's mac `generate_fallback_array` asks CoreText (`CTFontDescriptorCreateWithNameAndSize`), and CoreText only knows fonts registered with it. A bundled fallback font must go through `CTFontManagerRegisterGraphicsFont` and be named by its PostScript name. `CGFont::as_ptr` needs the `ForeignType` trait from the foreign-types 0.5 family in scope.
 - gpui's `paint_image` has no alpha and `with_element_opacity` is crate-private, so a faded picture is a div's `.opacity()` around a `canvas` that paints it, and a div cannot be built inside a paint callback (`request_layout` panics outside prepaint: "this method can only be called during request_layout, or prepaint"). The background pictures are therefore elements in `render` under the canvas element (`background_show.rs`), and `paint_world` stops filling the window while a list is set. gpui also keeps every decoded image for good (`remove_asset` + `Window::drop_image` free one): only the shown, fading and preloading pictures stay resident.

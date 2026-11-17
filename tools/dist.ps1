@@ -23,18 +23,15 @@
 #     infiniterm.exe        the app
 #     ift.exe               the command
 #     infiniterm-hook.exe   what Claude Code's hooks run
-#     infiniterm-helper.exe CEF's helper process (browser build)
-#     libcef.dll, *.pak, icudtl.dat, locales/ ...  CEF's runtime, which has to
-#                           sit beside the exe (browser build; CREDITS.html is
-#                           Chromium's third-party licence list)
 #     themes/               520 schemes and their licence
 #     LICENSE.txt
 #
-# The browser build needs CEF on this machine (CEF_PATH, and the tools the
-# CEF crate's build asks for: cmake, ninja, the MSVC environment). Without it,
-# pass -NoBrowser: the browser cards then show `browser_stub.rs`'s notice.
+# No browser engine on Windows since CEF was removed (#826): browser cards
+# show `browser_stub.rs`'s notice, so there is nothing beside the exe but the
+# three binaries. A WebView2 engine will add its loader here when it exists.
 param(
     [string]$Out = "target/dist-win",
+    # Kept so an old call does not fail; it does nothing now.
     [switch]$NoBrowser,
     # Where the updater would fetch from; only the manifest carries it. The
     # main repo's tagged download, the shape tools/dist.sh writes: the app's
@@ -63,36 +60,12 @@ $tag = "v$version-$build"
 # baked at compile time and cargo does not know the variable changed.
 $env:INFINITERM_BUILD = $build
 cargo clean -p infiniterm-ui
-if ($NoBrowser) {
-    cargo build --release -p infiniterm-ui --no-default-features
-} else {
-    # Default features: the browser, and `infiniterm-helper` with it.
-    cargo build --release -p infiniterm-ui
-}
+cargo build --release -p infiniterm-ui
 if ($LASTEXITCODE -ne 0) { throw "dist: building the app failed" }
 cargo build --release -p infiniterm-cli
 if ($LASTEXITCODE -ne 0) { throw "dist: building ift failed" }
 cargo build --release -p infiniterm-hook
 if ($LASTEXITCODE -ne 0) { throw "dist: building the hook failed" }
-
-# What CEF needs beside the exe, by name: the build script puts these in
-# target/release next to a lot that must not ship (bootstrap.exe, the import
-# library, cargo's lock files). Checked one by one, so a CEF layout that
-# changes fails here and not on somebody's machine.
-$cefFiles = @(
-    'infiniterm-helper.exe', 'libcef.dll', 'chrome_elf.dll', 'd3dcompiler_47.dll',
-    'dxcompiler.dll', 'dxil.dll', 'libEGL.dll', 'libGLESv2.dll', 'vulkan-1.dll',
-    'vk_swiftshader.dll', 'vk_swiftshader_icd.json', 'icudtl.dat', 'resources.pak',
-    'chrome_100_percent.pak', 'chrome_200_percent.pak', 'v8_context_snapshot.bin',
-    'CREDITS.html'
-)
-if (-not $NoBrowser) {
-    foreach ($f in $cefFiles + 'locales') {
-        if (-not (Test-Path "target/release/$f")) {
-            throw "dist: CEF's $f is not in target/release; the browser build did not lay out its runtime"
-        }
-    }
-}
 
 $themes = "$env:USERPROFILE\Code\infiniterm-tauri\src-tauri\resources\themes"
 if (-not (Test-Path $themes)) {
@@ -105,10 +78,6 @@ New-Item -ItemType Directory -Force $folder | Out-Null
 
 foreach ($exe in 'infiniterm.exe', 'ift.exe', 'infiniterm-hook.exe') {
     Copy-Item "target/release/$exe" $folder
-}
-if (-not $NoBrowser) {
-    foreach ($f in $cefFiles) { Copy-Item "target/release/$f" $folder }
-    Copy-Item -Recurse 'target/release/locales' (Join-Path $folder 'locales')
 }
 Copy-Item -Recurse $themes (Join-Path $folder 'themes')
 Copy-Item LICENSE.txt $folder

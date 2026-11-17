@@ -2,10 +2,9 @@
 //! workspace.json, loaded once and written back debounced through the same
 //! write-then-rename the save file uses.
 //!
-//! NOT Chromium's history. The CEF profile keeps a real SQLite `History` in
-//! <data>/browser/, but reading it means a SQLite dependency and a lock
-//! fight with the browser process that owns it, and we already see every
-//! navigation: browsers.rs receives an address change per frame.
+//! NOT WebKit's history, which is not ours to read: we already see every
+//! navigation (browsers.rs receives an address change per frame), so the
+//! history is kept here.
 //!
 //! Sorted on WRITE, never on read: `list` hands out a borrow that the model
 //! holds while it builds an OmniCtx, and a sort at read time would need

@@ -296,7 +296,7 @@ unsafe fn route_event(ev: *mut AnyObject) -> *mut AnyObject {
                 if let Some(at) = gesture::page_at(&routes_only, p) {
                     if let Some(e) = pages.iter().find(|e| &e.route == at) {
                         let local = (p.0 - e.route.rect[0], p.1 - e.route.rect[1]);
-                        if infiniterm_browser::surface::keylog() {
+                        if crate::page_surface::keylog() {
                             eprintln!("[webview] right-click on page {} at {local:?}", e.key);
                         }
                         MENUS.with(|m| {

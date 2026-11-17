@@ -74,7 +74,6 @@ pub mod complete;
 pub mod config;
 pub mod config_files;
 pub mod context_menu;
-pub mod devtools;
 pub mod download_status;
 pub mod drop;
 pub mod editor_keys;
@@ -85,7 +84,6 @@ pub mod webview_policy;
 #[rustfmt::skip]
 mod explorer_icon_table;
 pub mod explorer_icons;
-pub mod extensions;
 pub mod extracted_keys;
 pub mod file_proto;
 pub mod file_server;
