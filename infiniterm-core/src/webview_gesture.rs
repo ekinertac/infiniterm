@@ -212,6 +212,24 @@ mod tests {
     }
 
     #[test]
+    fn a_cmd_and_ctrl_wheel_over_a_page_is_the_canvas_too() {
+        // The pan of #823: Cmd+Ctrl + two fingers over a page goes to gpui,
+        // where `AppView::wheel` pans, not to the page.
+        let both = Mods {
+            cmd: true,
+            ctrl: true,
+        };
+        assert_eq!(
+            route(Kind::Scroll, both, (10., 10.), &one(true), false),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::Scroll, both, (10., 10.), &one(false), false),
+            Target::Gpui
+        );
+    }
+
+    #[test]
     fn a_cmd_or_ctrl_wheel_is_the_canvas() {
         assert_eq!(
             route(Kind::Scroll, CMD, (10., 10.), &one(true), false),

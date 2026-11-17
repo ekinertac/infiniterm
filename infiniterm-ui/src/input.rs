@@ -1021,6 +1021,26 @@ impl AppView {
                 return;
             }
         }
+        // Cmd+Ctrl + two fingers pans the canvas (#823): the content follows
+        // the fingers, over any card (a card's own scroll is plain scroll),
+        // before the zoom below, which Cmd+Ctrl used to fall into.
+        if infiniterm_core::scroll_nav::claims_pan(m.platform, m.control, m.alt, m.shift) {
+            self.animator.cancel();
+            // One usage line per pan gesture, not per wheel event.
+            static LAST_PAN_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let now = now_ms() as u64;
+            let last = LAST_PAN_MS.swap(now, std::sync::atomic::Ordering::Relaxed);
+            if now.saturating_sub(last) > infiniterm_core::usage_log::ZOOM_GESTURE_GAP_MS {
+                self.note_use("mouse.canvas.pan.scroll");
+            }
+            let (vx, vy) =
+                infiniterm_core::scroll_nav::pan_viewport_delta(dx, dy, self.model.viewport.scale);
+            self.model.viewport.x += vx;
+            self.model.viewport.y += vy;
+            self.model.stop_framing();
+            self.model.dirty_layout = true;
+            return;
+        }
         if e.modifiers.platform || e.modifiers.control {
             self.animator.cancel();
             // One usage line per zoom gesture, not per wheel event.

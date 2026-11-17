@@ -364,17 +364,38 @@ pub fn parse_link(raw: &str) -> Option<String> {
 /// What a Cmd+click, Cmd+Shift+click or middle-click on a link does, as the
 /// Chromium card does it (every non-current-tab disposition opens a tab): the
 /// link, unless it is another app's, which goes to the app-link question.
+/// Only a page address opens a tab: `javascript:` and `data:` links, which
+/// `a.href` reports like any other, would run or show script-made content in
+/// a tab of their own, and Chromium does not open them either.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkOpen {
     Tab(String),
     App(String),
+    /// A scheme no tab opens: dropped without a word.
+    Ignore,
+}
+
+/// The schemes a link may open a tab on: web pages, local files and
+/// `about:`. The Chromium card gets only what Chromium itself would navigate
+/// to; a web view's `a.href` carries every scheme, so the list is explicit.
+const TAB_SCHEMES: &[&str] = &["http", "https", "file", "about"];
+
+fn link_scheme(href: &str) -> Option<String> {
+    let (scheme, _) = href.trim().split_once(':')?;
+    (!scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+    .then(|| scheme.to_ascii_lowercase())
 }
 
 pub fn classify_link(href: &str) -> LinkOpen {
     if crate::app_link::is_app_link(href) {
-        LinkOpen::App(href.to_string())
-    } else {
-        LinkOpen::Tab(href.to_string())
+        return LinkOpen::App(href.to_string());
+    }
+    match link_scheme(href) {
+        Some(s) if TAB_SCHEMES.contains(&s.as_str()) => LinkOpen::Tab(href.to_string()),
+        _ => LinkOpen::Ignore,
     }
 }
 
@@ -541,6 +562,34 @@ mod tests {
         assert_eq!(parse_link("\"\""), None);
         assert_eq!(parse_link("null"), None);
         assert_eq!(parse_link("garbage"), None);
+    }
+
+    #[test]
+    fn only_page_addresses_open_a_tab_and_script_links_are_dropped() {
+        for ok in [
+            "http://a.test/",
+            "HTTPS://a.test/x?y=1",
+            "file:///tmp/a.html",
+            "about:blank",
+        ] {
+            assert_eq!(classify_link(ok), LinkOpen::Tab(ok.into()), "{ok}");
+        }
+        for dropped in [
+            "javascript:alert(1)",
+            "JavaScript:void(0)",
+            "data:text/html,<b>x</b>",
+            "blob:https://a.test/uuid",
+            "",
+            "no scheme at all",
+            ":empty",
+        ] {
+            assert_eq!(classify_link(dropped), LinkOpen::Ignore, "{dropped:?}");
+        }
+        // Another app's scheme is still the app-link question, not dropped.
+        assert_eq!(
+            classify_link("slack://open"),
+            LinkOpen::App("slack://open".into())
+        );
     }
 
     #[test]

@@ -9,6 +9,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-17
 
 - Fixed: on macOS 27.2 the window could not be dragged by its title bar. Dragging the empty part of the bar moves it again; dragging a workspace tab still reorders tabs and never moves the window.
+- Cmd+Ctrl held with a two-finger scroll now pans the canvas, in every direction, the content following your fingers, over any card including a browser card. It is listed in the shortcuts panel (Cmd+/). Before, Cmd+Ctrl with a scroll zoomed.
+- Fixed: with `browser.engine` set to `"webview"`, Cmd+click and middle-click on a `javascript:` or `data:` link no longer open a tab; only web, file and `about:` addresses do, and another app's link still asks first.
 - Fixed: with `browser.engine` set to `"webview"`, Cmd+click, Cmd+Shift+click and middle-click on a link open it in a new tab of the card, as they do with Chromium (before, the page navigated in place). A drag with Cmd or the middle button still pans the canvas.
 - With `browser.engine` set to `"webview"`, the status bar shows one readout for every download in progress, for example "2 downloads, 41%": the count, and the bytes received over the bytes expected across all of them. A download whose size the server did not say counts in the number and not in the percent. The readout is gone when the last download finishes, fails or is cancelled.
 - Fixed: with `browser.engine` set to `"webview"`, pressing Escape twice quickly now gives the keyboard back from a focused browser card, as it does with Chromium (400 ms between the presses). One Escape still reaches the page. Cmd+Escape leaves the card too.
