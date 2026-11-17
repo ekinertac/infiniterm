@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-17
+
+- Fixed: a locked browser card in the fit-all view (Cmd+2, or any zoom far enough out that the page shows as a picture) now unlocks with Escape twice, and the app's keys work there again. Before, those keys went nowhere until you clicked another card.
+
 ## 0.6.17 (build 1753), 2026-11-17
 
 ### 2026-11-17

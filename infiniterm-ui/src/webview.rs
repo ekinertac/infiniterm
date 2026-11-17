@@ -470,6 +470,18 @@ unsafe fn apply_mask(view: &AnyObject, rect: [f64; 4], holes: &[[f64; 4]]) {
     CGPathRelease(path);
 }
 
+/// Whether this web view holds the keys in its window right now.
+fn is_first_responder(view: &AnyObject) -> bool {
+    unsafe {
+        let window: *mut AnyObject = msg_send![view, window];
+        if window.is_null() {
+            return false;
+        }
+        let fr: *const AnyObject = msg_send![window, firstResponder];
+        std::ptr::eq(fr, view)
+    }
+}
+
 unsafe fn rgba_color(rgb: [f32; 3], alpha: f64) -> *mut AnyObject {
     let col: *mut AnyObject = msg_send![class!(NSColor), colorWithSRGBRed: rgb[0] as f64, green: rgb[1] as f64, blue: rgb[2] as f64, alpha: alpha];
     msg_send![col, CGColor]
@@ -635,6 +647,19 @@ impl PageSurface for WebSurface {
         s.view = None;
     }
     fn focus(&self, on: bool) {
+        // A page shown as its picture is hidden and cannot hold the keys
+        // (#837); `place` gives them to it when it is live again.
+        if on
+            && self
+                .core
+                .state
+                .borrow()
+                .last
+                .as_ref()
+                .is_some_and(|l| l.snapshot)
+        {
+            return;
+        }
         let _ = self.with_view(|wv| {
             let _ = if on { wv.focus() } else { wv.focus_parent() };
         });
@@ -759,7 +784,28 @@ impl PageSurface for WebSurface {
                 size: LogicalSize::new(p.rect[2].max(1.), p.rect[3].max(1.)).into(),
             });
             let _ = wv.zoom(p.zoom);
+            let view_of = |snapshot: bool| {
+                if snapshot {
+                    policy::PageView::Snapshot
+                } else {
+                    policy::PageView::Live
+                }
+            };
+            let keys = policy::keys_on_view_change(
+                s.last.as_ref().map(|l| view_of(l.snapshot)),
+                view_of(p.snapshot),
+                p.locked,
+            );
+            // Before hiding: a hidden first responder's keys go to the window
+            // and are lost (#837). Only this page's keys move, never another
+            // card's.
+            if keys == Some(policy::KeysTo::App) && is_first_responder(&wv.webview()) {
+                let _ = wv.focus_parent();
+            }
             let _ = wv.set_visible(!p.snapshot);
+            if keys == Some(policy::KeysTo::Page) {
+                let _ = wv.focus();
+            }
             let view = wv.webview();
             drop(s);
             // The dimmer: a colour view above the page, made on first use.
