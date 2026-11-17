@@ -9,6 +9,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-17
 
 - Fixed: on macOS 27.2 the window could not be dragged by its title bar. Dragging the empty part of the bar moves it again; dragging a workspace tab still reorders tabs and never moves the window.
+- Cmd+Ctrl held with a two-finger scroll now pans the canvas, in every direction, the content following your fingers, over any card including a browser card. It is listed in the shortcuts panel (Cmd+/). Before, Cmd+Ctrl with a scroll zoomed.
+- Fixed: with `browser.engine` set to `"webview"`, Cmd+click and middle-click on a `javascript:` or `data:` link no longer open a tab; only web, file and `about:` addresses do, and another app's link still asks first.
 - Fixed: with `browser.engine` set to `"webview"`, Cmd+click, Cmd+Shift+click and middle-click on a link open it in a new tab of the card, as they do with Chromium (before, the page navigated in place). A drag with Cmd or the middle button still pans the canvas.
 - Fixed: with `browser.engine` set to `"webview"`, pressing Escape twice quickly now gives the keyboard back from a focused browser card, as it does with Chromium (400 ms between the presses). One Escape still reaches the page. Cmd+Escape leaves the card too.
 - With `browser.engine` set to `"webview"`, pages see Safari's user agent (WebKit's own string plus `Version/N Safari/605.1.15`), and a card keeps its sign-ins, cookies and local storage across restarts in a store that belongs to that data folder, apart from Chromium's and from any other instance's. Sign in once again on each site after switching engines.

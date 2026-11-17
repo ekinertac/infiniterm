@@ -221,7 +221,7 @@ impl WebSurface {
                 {
                     Some(policy::LinkOpen::Tab(url)) => s.popups.push(url),
                     Some(policy::LinkOpen::App(url)) => s.external_links.push(url),
-                    None => {}
+                    Some(policy::LinkOpen::Ignore) | None => {}
                 },
             }
         }

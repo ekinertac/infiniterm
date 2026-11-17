@@ -50,6 +50,10 @@ pub const MOUSE_GESTURES: &[(&str, &str)] = &[
         "Mouse: Cmd+Shift + two fingers sideways switches workspace",
     ),
     (
+        "mouse.canvas.pan.scroll",
+        "Mouse: Cmd+Ctrl + two fingers pans the canvas",
+    ),
+    (
         "mouse.fitCard.doubleclick",
         "Mouse: double-click a frame to fit the card",
     ),

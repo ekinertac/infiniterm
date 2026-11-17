@@ -131,6 +131,27 @@ pub fn claims_workspace(dx: f64, dy: f64) -> bool {
     (dx == 0. && dy == 0.) || dx.abs() >= dy.abs() * HORIZONTAL_RATIO
 }
 
+/// Whether a scroll event pans the canvas (#823): Cmd and Ctrl held, and
+/// neither Alt (Cmd+Alt moves the focus) nor Shift (Cmd+Shift switches
+/// workspace). Cmd+Ctrl with either of those is not claimed. Without Shift or
+/// Alt, Cmd+Ctrl used to fall into the zoom (Cmd or Ctrl + scroll).
+pub fn claims_pan(cmd: bool, ctrl: bool, alt: bool, shift: bool) -> bool {
+    cmd && ctrl && !alt && !shift
+}
+
+/// How far a pan scroll moves the viewport, in world units, for a scroll
+/// delta in screen pixels (a notched wheel's lines are already turned into
+/// pixels by the caller). The content follows the fingers, as it does under
+/// a Cmd+drag (`viewport.x -= dragged / scale`): fingers moving down move the
+/// canvas down, which is the viewport's origin moving up. A zero or negative
+/// scale never divides.
+pub fn pan_viewport_delta(dx: f64, dy: f64, scale: f64) -> (f64, f64) {
+    if scale <= 0. {
+        return (0., 0.);
+    }
+    (-dx / scale, -dy / scale)
+}
+
 /// One scroll event, as `AppView::wheel` gets it.
 #[derive(Clone, Copy, Debug)]
 pub struct ScrollEv {
@@ -276,6 +297,44 @@ impl NavState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_cmd_and_ctrl_together_pan() {
+        assert!(claims_pan(true, true, false, false));
+        assert!(!claims_pan(true, false, false, false), "Cmd alone zooms");
+        assert!(!claims_pan(false, true, false, false), "Ctrl alone zooms");
+        assert!(
+            !claims_pan(true, true, true, false),
+            "Cmd+Ctrl+Alt is not claimed"
+        );
+        assert!(
+            !claims_pan(true, true, false, true),
+            "Cmd+Ctrl+Shift is not claimed"
+        );
+        assert!(!claims_pan(false, false, false, false));
+    }
+
+    #[test]
+    fn a_pan_follows_the_fingers_in_both_directions() {
+        // Fingers moving right and down move the content right and down, so
+        // the viewport's origin goes left and up.
+        assert_eq!(pan_viewport_delta(30., 40., 1.), (-30., -40.));
+        assert_eq!(pan_viewport_delta(-30., -40., 1.), (30., 40.));
+        assert_eq!(pan_viewport_delta(0., 0., 1.), (-0., -0.));
+    }
+
+    #[test]
+    fn a_pan_covers_the_same_screen_distance_at_any_zoom() {
+        // At 50% a world unit is half a pixel: 30 px of scroll is 60 units.
+        assert_eq!(pan_viewport_delta(30., 0., 0.5), (-60., -0.));
+        assert_eq!(pan_viewport_delta(30., 0., 2.), (-15., -0.));
+    }
+
+    #[test]
+    fn a_pan_never_divides_by_a_dead_scale() {
+        assert_eq!(pan_viewport_delta(30., 30., 0.), (0., 0.));
+        assert_eq!(pan_viewport_delta(30., 30., -1.), (0., 0.));
+    }
 
     fn ev(dx: f64, dy: f64, phase: Phase, now: f64) -> ScrollEv {
         ScrollEv {

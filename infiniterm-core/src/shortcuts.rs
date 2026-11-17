@@ -266,6 +266,11 @@ pub const GESTURES: &[(&str, &str, &str)] = &[
         "Switch workspace",
         "mouse.workspace.scroll",
     ),
+    (
+        "Cmd Ctrl + two fingers",
+        "Pan the canvas, the content follows the fingers",
+        "mouse.canvas.pan.scroll",
+    ),
     ("Cmd drag", "Pan the canvas", "mouse.canvas.pan"),
     ("middle drag", "Pan the canvas", "mouse.canvas.pan"),
     (
