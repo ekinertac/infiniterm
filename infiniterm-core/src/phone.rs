@@ -252,6 +252,40 @@ pub fn bare_host_warning(host: &str, source: HostSource) -> Option<String> {
     })
 }
 
+/// The links an installer puts `ift` on the PATH with: `~/.local/bin/ift`
+/// (relative to home; Linux `install.sh`, `ift connect --install` for a
+/// user) and `/usr/local/bin/ift` (for root). On Linux the real binary sits
+/// in a folder named after its version, which an update replaces and later
+/// deletes, so a phone pinned to it kept running the old `ift` and broke
+/// when the folder went (#818).
+pub const STABLE_IFT_LINKS: [&str; 2] = [".local/bin/ift", "/usr/local/bin/ift"];
+
+/// The `ift` path a phone is paired with: the first link (`STABLE_IFT_LINKS`,
+/// given as the link and the real file it resolves to, if any) that resolves
+/// to this binary, else this binary's real path. The gate compares real
+/// paths, so a phone pinned to the link follows every update.
+pub fn stable_ift_path(own: &str, links: &[(String, Option<String>)]) -> String {
+    links
+        .iter()
+        .find(|(_, target)| target.as_deref() == Some(own))
+        .map(|(link, _)| link.clone())
+        .unwrap_or_else(|| own.to_string())
+}
+
+/// Each paired phone's name and the `ift` path its forced command runs, in
+/// file order; a line of ours without a readable command is left out.
+pub fn paired_ift_paths(existing: &str) -> Vec<(String, String)> {
+    existing
+        .lines()
+        .filter_map(|l| {
+            let name = tagged(l)?;
+            let rest = l.split_once("command=\"")?.1;
+            let path = rest.split_once(" phone-gate\"")?.0;
+            Some((name.to_string(), path.to_string()))
+        })
+        .collect()
+}
+
 /// The names of the paired phones, in file order.
 pub fn paired_names(existing: &str) -> Vec<String> {
     existing
@@ -504,6 +538,42 @@ mod tests {
         assert_eq!(bare_host_warning("203.0.113.7", HostSource::Given), None);
         let w = bare_host_warning("box", HostSource::Hostname).unwrap();
         assert!(w.contains("\"box\"") && w.contains("--host"), "{w}");
+    }
+
+    #[test]
+    fn a_phone_is_pinned_to_the_link_that_resolves_to_this_ift() {
+        let own = "/home/u/.local/share/infiniterm/0.6.17/ift";
+        let links = vec![
+            ("/home/u/.local/bin/ift".to_string(), Some(own.to_string())),
+            ("/usr/local/bin/ift".to_string(), None),
+        ];
+        assert_eq!(stable_ift_path(own, &links), "/home/u/.local/bin/ift");
+        // A link to some other ift is not ours.
+        let other = vec![(
+            "/home/u/.local/bin/ift".to_string(),
+            Some("/opt/other/ift".to_string()),
+        )];
+        assert_eq!(stable_ift_path(own, &other), own);
+        // No link at all (the Mac's app bundle): the real path, as before.
+        assert_eq!(stable_ift_path(own, &[]), own);
+    }
+
+    #[test]
+    fn the_paired_ift_path_is_read_back_from_each_line() {
+        let key = [7u8; 32];
+        let a = authorized_line("/home/u/.local/share/infiniterm/0.6.15/ift", &key, "old").unwrap();
+        let b = authorized_line("/home/u/.local/bin/ift", &key, "new").unwrap();
+        let text = format!("ssh-ed25519 AAAA someone@else\n{a}\n{b}\n");
+        assert_eq!(
+            paired_ift_paths(&text),
+            vec![
+                (
+                    "old".to_string(),
+                    "/home/u/.local/share/infiniterm/0.6.15/ift".to_string()
+                ),
+                ("new".to_string(), "/home/u/.local/bin/ift".to_string()),
+            ]
+        );
     }
 
     #[test]
