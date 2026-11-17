@@ -41,7 +41,7 @@ On Windows `ift` already works inside every card, with no setup: the app puts it
 
 ## Build from source
 
-The source is public. You need Rust, the CEF binary distribution and a checkout of cef-rs for its bundler; the README has the steps. Builds are yours to use, not to hand to anyone else.
+The source is public. You need Rust; the README has the steps. Builds are yours to use, not to hand to anyone else.
 
 ## Agent hooks
 
