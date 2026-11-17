@@ -64,6 +64,31 @@ pub fn page_view(s: &PageState) -> PageView {
     }
 }
 
+/// Which view should take the keyboard when a page switches between live
+/// and its picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeysTo {
+    /// The web view.
+    Page,
+    /// gpui's own view, where the app's keys and its double-Escape live.
+    App,
+}
+
+/// A page hidden for its picture cannot keep the keyboard: AppKit gives a
+/// hidden first responder's keys to the window itself, which passes them to
+/// nobody, so a locked card in the fit-all view ignored Escape (#837). Going
+/// to the picture hands the keys to the app (the caller does it only if this
+/// page had them); coming back live hands them back to a locked page. Every
+/// other frame changes nothing, so a find bar typed into over a live page
+/// keeps the keys.
+pub fn keys_on_view_change(was: Option<PageView>, now: PageView, locked: bool) -> Option<KeysTo> {
+    match (was, now) {
+        (Some(PageView::Live), PageView::Snapshot) => Some(KeysTo::App),
+        (Some(PageView::Snapshot), PageView::Live) if locked => Some(KeysTo::Page),
+        _ => None,
+    }
+}
+
 /// Alpha of the colour wash over an unfocused page (`ui.inactiveDim`). The
 /// webview's own alpha does nothing, so the wash is a view above it.
 pub fn dim_alpha(focused: bool, inactive_dim: f64) -> f64 {
@@ -732,6 +757,30 @@ mod tests {
     fn a_page_is_live_at_and_above_half_zoom_with_nothing_hiding_it() {
         assert_eq!(page_view(&state(1., false)), PageView::Live);
         assert_eq!(page_view(&state(FAR_ZOOM, false)), PageView::Live);
+    }
+
+    #[test]
+    fn the_keys_leave_a_page_that_turns_into_its_picture_and_come_back_when_locked() {
+        use PageView::{Live, Snapshot};
+        assert_eq!(
+            keys_on_view_change(Some(Live), Snapshot, true),
+            Some(KeysTo::App)
+        );
+        assert_eq!(
+            keys_on_view_change(Some(Live), Snapshot, false),
+            Some(KeysTo::App)
+        );
+        assert_eq!(
+            keys_on_view_change(Some(Snapshot), Live, true),
+            Some(KeysTo::Page)
+        );
+        // Unlocked, the app keeps the keys when the page comes back.
+        assert_eq!(keys_on_view_change(Some(Snapshot), Live, false), None);
+        // No change, or the first placement: nothing moves.
+        assert_eq!(keys_on_view_change(Some(Live), Live, true), None);
+        assert_eq!(keys_on_view_change(Some(Snapshot), Snapshot, true), None);
+        assert_eq!(keys_on_view_change(None, Live, true), None);
+        assert_eq!(keys_on_view_change(None, Snapshot, true), None);
     }
 
     #[test]
