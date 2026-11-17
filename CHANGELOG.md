@@ -6,6 +6,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+## 0.6.17 (build 1753), 2026-11-17
+
 ### 2026-11-17
 
 - Chromium is gone from the app. Browser cards on the Mac use the system's own WebKit only, and the app is 317 MB smaller (about 50 MB instead of 367 MB). What you lose: the Claude in Chrome extension in browser cards (and `ift install-extension`, which now says so and exits 2), the DevTools card (the DevTools command now tells you to use Safari's Develop menu), and the Google sign-in workaround. The setting `browser.engine` is removed; a settings.json that still has it keeps working, the key is ignored.
