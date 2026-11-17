@@ -497,7 +497,10 @@ mod tests {
 
     #[test]
     fn only_the_hostname_fallback_warns() {
-        assert_eq!(bare_host_warning("mini.tail1234.ts.net", HostSource::Tailscale), None);
+        assert_eq!(
+            bare_host_warning("mini.tail1234.ts.net", HostSource::Tailscale),
+            None
+        );
         assert_eq!(bare_host_warning("203.0.113.7", HostSource::Given), None);
         let w = bare_host_warning("box", HostSource::Hostname).unwrap();
         assert!(w.contains("\"box\"") && w.contains("--host"), "{w}");
