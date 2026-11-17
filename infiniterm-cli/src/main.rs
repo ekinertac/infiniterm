@@ -178,8 +178,11 @@ ift — drive infiniterm from a shell
   ift phone add <name>       pair a phone: make it a key restricted to this
                              Mac's own ssh, and print a QR code to scan with
                              the infiniterm app. The code holds the phone's
-                             private key, so anyone who sees it can use it
-  ift phone list             the paired phones, one name per line
+                             private key, so anyone who sees it can use it.
+                             The address in it is --host, else the
+                             Tailscale name, else the bare hostname (which
+                             it warns about); --port when sshd is not on 22
+  ift phone list            the paired phones, one name per line
   ift phone remove <name>    unpair a phone: its key stops working
   ift commands               every command the app registers: id, label,
                              key; the palette's list as text (the default

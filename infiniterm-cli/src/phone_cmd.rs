@@ -63,13 +63,27 @@ fn authorized_keys_path() -> PathBuf {
     home().join(".ssh").join("authorized_keys")
 }
 
-/// This binary's real path: what the phone is told to call, and what the gate
-/// compares the phone's first word with.
+/// This binary's real path: what the gate compares the real path of the
+/// phone's first word with. The phone itself is told `pairing_path`.
 fn own_path() -> Result<String, String> {
     std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| format!("cannot find this ift: {e}"))
+}
+
+/// The path a phone is paired with: the installer's link to this binary when
+/// there is one (`phone::stable_ift_path`), so an update does not strand it.
+fn pairing_path(own: &str) -> String {
+    let links: Vec<(String, Option<String>)> = phone::STABLE_IFT_LINKS
+        .iter()
+        .map(|l| {
+            let link = if l.starts_with('/') { PathBuf::from(l) } else { home().join(l) };
+            let target = link.canonicalize().ok().map(|p| p.to_string_lossy().into_owned());
+            (link.to_string_lossy().into_owned(), target)
+        })
+        .collect();
+    phone::stable_ift_path(own, &links)
 }
 
 fn add(args: &[String]) -> Result<(), String> {
@@ -106,7 +120,7 @@ fn add(args: &[String]) -> Result<(), String> {
         .ok()
         .and_then(|t| phone::host_key_blob(&t))
         .ok_or_else(|| format!("cannot read the sshd host key {HOST_KEY}"))?;
-    let ift = own_path()?;
+    let ift = pairing_path(&own_path()?);
     // Before the key is made or written: a forward that cannot be set up
     // leaves nothing behind.
     let (port, note) = match port {
@@ -117,7 +131,10 @@ fn add(args: &[String]) -> Result<(), String> {
     let line = phone::authorized_line(&ift, &public, &name)?;
     let text = phone::add_line(&existing, &line, &name)?;
     write_private(&keys, &text)?;
-    let host = host.unwrap_or_else(default_host);
+    let (host, source) = match host {
+        Some(h) => (h, phone::HostSource::Given),
+        None => default_host(),
+    };
     let url = phone::pair_url(&phone::Pairing {
         name: &computer_name(),
         host: &host,
@@ -134,6 +151,10 @@ fn add(args: &[String]) -> Result<(), String> {
     println!("The code holds the phone's private key: anyone who sees it can use it.");
     println!("This terminal card's session buffer keeps it too. If anyone saw it, run:");
     println!("  ift phone remove {name}");
+    // After the code, where it is read last; stderr, so it stands apart.
+    if let Some(warning) = phone::bare_host_warning(&host, source) {
+        eprintln!("\nift: {warning}");
+    }
     if let Some(note) = note {
         println!("\n{note}");
     }
@@ -234,6 +255,19 @@ fn list() -> Result<(), String> {
     let text = std::fs::read_to_string(authorized_keys_path()).unwrap_or_default();
     for n in phone::paired_names(&text) {
         println!("{n}");
+    }
+    // A phone paired before #818 may be pinned to a version folder an update
+    // replaced: its path no longer leads to this ift, or to nothing. Said on
+    // stderr so the list itself stays one name per line.
+    if let Ok(own) = own_path() {
+        for (name, path) in phone::paired_ift_paths(&text) {
+            let target = Path::new(&path).canonicalize().ok();
+            if target.as_deref() != Some(Path::new(&own)) {
+                eprintln!(
+                    "ift: {name} is paired with {path}, which is not this ift (an update replaced it, or it is gone); pair it again: ift phone remove {name} && ift phone add {name}"
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -338,8 +372,9 @@ fn run_text(cmd: &str, args: &[&str]) -> Option<String> {
     (out.status.success() && !text.is_empty()).then_some(text)
 }
 
-/// The Tailscale MagicDNS name when there is one, else the hostname.
-fn default_host() -> String {
+/// The Tailscale MagicDNS name when there is one, else the hostname, and
+/// which of the two it is.
+fn default_host() -> (String, phone::HostSource) {
     for cmd in ["tailscale", TAILSCALE_APP] {
         let name = run_text(cmd, &["status", "--json"])
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
@@ -347,10 +382,11 @@ fn default_host() -> String {
             .map(|n| n.trim_end_matches('.').to_string())
             .filter(|n| !n.is_empty());
         if let Some(n) = name {
-            return n;
+            return (n, phone::HostSource::Tailscale);
         }
     }
-    run_text("hostname", &[]).unwrap_or_else(|| "localhost".into())
+    let name = run_text("hostname", &[]).unwrap_or_else(|| "localhost".into());
+    (name, phone::HostSource::Hostname)
 }
 
 fn computer_name() -> String {

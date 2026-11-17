@@ -40,6 +40,21 @@ fn the_paired_ift_may_run_an_allowed_verb() {
     assert!(out.starts_with("ift "), "{out}");
 }
 
+// A phone paired with the installer's link (`~/.local/bin/ift`, #818) names
+// the link, not the version folder behind it; the gate compares real paths.
+#[test]
+fn a_phone_paired_with_a_link_to_this_ift_may_run_a_verb() {
+    let dir = std::env::temp_dir().join(format!("ift-gate-link-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let link = dir.join("ift");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(paired(), &link).unwrap();
+    let (code, out, err) = gate(Some(&format!("{} --version", link.display())));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(out.starts_with("ift "), "{out}");
+}
+
 #[test]
 fn the_file_service_runs_for_a_phone_only_read_only() {
     // No stdin, so the service ends at once with a clean exit.
