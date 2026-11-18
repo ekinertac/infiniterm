@@ -1,6 +1,6 @@
 # infiniterm native port: handover
 
-> Historical, kept as written. Everything below about CEF, cef-rs, the Claude in Chrome extension and the Google sign-in workaround is the spike-phase record: CEF was removed from the tree on 2026-11-17 (#826) and the browser card is now the system web view (WKWebView through wry; see `docs/agent/browser-and-pages.md` and `docs/agent/webview-spike.md`).
+> Historical, kept as written. The `spikes/` folder it points to was deleted on 2026-11-19; `git log --stat -- spikes` has every spike's code and NOTES.md. Everything below about CEF, cef-rs, the Claude in Chrome extension and the Google sign-in workaround is the spike-phase record: CEF was removed from the tree on 2026-11-17 (#826) and the browser card is now the system web view (WKWebView through wry; see `docs/agent/browser-and-pages.md` and `docs/agent/webview-spike.md`).
 
 Written 2026-09-15 at the end of the spike sessions. This is the file to give a fresh session. It holds every decision, every spike result with its numbers, what exists on this Mac, and the port plan file by file. The plan is written so the session can port without asking Ekin what to do next; the one standing instruction is at the top of the next section.
 
