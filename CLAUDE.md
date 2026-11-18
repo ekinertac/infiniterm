@@ -16,7 +16,7 @@ infiniterm-ui/src/          the gpui app: menus.rs + native_menu.rs (the right-c
 infiniterm-cli/, infiniterm-hook/   ift and the hook binary
 ```
 
-The rest of the map (assets, site/, tools/, HANDOVER.md, docs/, spikes/) is in `docs/agent/repo-map.md`.
+The rest of the map (assets, site/, tools/, HANDOVER.md, docs/) is in `docs/agent/repo-map.md`.
 
 The Tauri app this replaced is archived at `~/Code/infiniterm-tauri` (`ekinertac/infiniterm-tauri`). Its `CLAUDE.md` holds the long-form rationale for the rules below; read it when a rule seems arbitrary. Nothing lands there.
 
@@ -59,7 +59,7 @@ Read the one for the area you touch; each starts with what it covers and which s
 - `docs/agent/ui-chrome.md`: key and text input, frames on demand, window frame and menu, full screen, dialogs, find in a card, fields, fuzzy match, keycast, shortcuts panel. Before touching `input.rs`, `keycode.rs`, `ime.rs`, `overlays.rs`, `prompt.rs`, `field.rs`.
 - `docs/agent/cli-and-ift.md`: `ift <file>` editing in place, `ift send/read/close/run`, `ift ls/sessions/commands/completion`, file drops. Before touching `infiniterm-cli/src/main.rs`, `ift_in.rs`, `cover.rs`, `drop.rs`.
 - `docs/agent/release-and-site.md`: releases and the updater, patch-only versioning, the changelog and what's-new sheet, the docs inside the app, the welcome card, licensing. Before touching `tools/dist.sh`, `publish.sh`, `update.rs`, `updater.rs`, `site/`.
-- `docs/agent/repo-map.md`: assets, `site/`, `tools/` scripts, `HANDOVER.md`, `docs/`, `spikes/`. When you need to find which script does a thing.
+- `docs/agent/repo-map.md`: assets, `site/`, `tools/` scripts, `HANDOVER.md`, `docs/`. When you need to find which script does a thing.
 - `docs/agent/traps-code.md`: traps in the code (sockets and threads, gpui, the web view, keys, painting, menus, files, replay, tmux). Before touching the area a heading names.
 - `docs/agent/traps-workflow.md`: traps in running, testing, driving, building, signing, cargo, git and shell quoting. Before running the app, writing a driver scenario, committing or merging.
 

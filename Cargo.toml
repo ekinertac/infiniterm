@@ -1,7 +1,7 @@
 # Native port workspace, used by root-level Cargo commands.
 # Keep the crates separate so UI dependencies cannot leak into the core.
-# The spikes' code is gone (their replacements are the crates); spikes/*/NOTES.md
-# keep the measurements. See HANDOVER.md for the phase plan.
+# The spikes were deleted on 2026-11-19 (git history has them); HANDOVER.md keeps
+# their results and the phase plan.
 [workspace]
 members = [
     "infiniterm-core",
@@ -13,8 +13,6 @@ members = [
     "infiniterm-session",
 ]
 resolver = "2"
-# The spikes carry their own lockfiles; nothing in the app builds them.
-exclude = ["spikes/card-texture"]
 
 [workspace.package]
 version = "0.6.17"

@@ -23,5 +23,5 @@ tools/locked.swift, winid.swift   the driver's probes: is the Mac locked, which 
 tools/paintlog.sh           relaunches the installed app with `[paint]` logging into ~/infiniterm.log (quit it first); how the far-zoom numbers were measured
 HANDOVER.md                 the rewrite's log, phase by phase, with the measurements and decisions
 docs/                       roadmap.md (where this stands: done, v1.5, v2, parked; the file to update when something ships); the file-by-file map from the Tauri app, kept as history; tmux-handover.md (the tmux backend's checkpoint, bugs and open items); superpowers/ (the omnibox and daemon specs and plans)
-spikes/*/NOTES.md           the four spikes' measurements; their code is gone (git log has it). The CEF spikes' notes are archived there (CEF was removed in #826)
+(spikes/ was deleted on 2026-11-19: the spike code and notes are in git history; HANDOVER.md keeps their results)
 ```
