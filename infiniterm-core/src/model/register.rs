@@ -675,6 +675,7 @@ mod tests {
                     },
                     shown: &|c| Some(c.to_string()),
                     git: &|| None,
+                    spelling: &|| None,
                 },
             );
             fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
@@ -1422,6 +1423,67 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    // Spell check (#850): each command asks the focused editor; the guesses
+    // are the palette's rows in the checker's order, and a pick, from the
+    // palette or the menu, replaces the word by the guess's index.
+    #[test]
+    fn spelling_commands_reach_the_editor_and_a_pick_replaces_the_word() {
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.md".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        for (cmd, act) in [
+            ("editor.spelling.next", SpellAct::Next),
+            ("editor.spelling.suggest", SpellAct::Suggest),
+            ("editor.spelling.learn", SpellAct::Learn),
+            ("editor.spelling.ignore", SpellAct::Ignore),
+        ] {
+            let effects = h.run(cmd);
+            assert!(
+                effects.iter().any(|e| matches!(
+                    e,
+                    Effect::Editor { action: EditorAction::Spelling(a), .. } if *a == act
+                )),
+                "{cmd}"
+            );
+        }
+        h.m.open_spelling(&id, "teh", vec!["the".into(), "ten".into()]);
+        assert_eq!(h.m.palette.source, Some(Source::Spelling));
+        let items = h.m.palette_items(Source::Spelling, &[]);
+        assert_eq!(items[0].label, "the");
+        h.m.effects.clear();
+        h.m.palette_run(Source::Spelling, &items[1].id);
+        assert!(h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Spelling(SpellAct::Use(1)),
+                ..
+            }
+        )));
+        h.m.effects.clear();
+        let pick = format!("{}0", crate::context_menu::SPELL_PICK);
+        assert!(h.m.menu_spell_pick(&pick));
+        assert!(h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Spelling(SpellAct::Use(0)),
+                ..
+            }
+        )));
+        assert!(!h.m.menu_spell_pick("card.close"));
+        // No guesses: a notice, no empty palette.
+        h.m.close_palette(false);
+        h.m.open_spelling(&id, "xqzt", vec![]);
+        assert_ne!(h.m.palette.source, Some(Source::Spelling));
     }
 
     // Cmd+P (#602): in an editor card it asks the ui for the file list; the

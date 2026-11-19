@@ -377,6 +377,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.spellcheck",
+        &[
+            "Underline misspelled words in plain text and Markdown files, untitled",
+            "editors and the in-place editor (EDITOR=ift), with the system's spell",
+            "checker. Code is never checked. macOS only. Off by default.",
+        ],
+    ),
+    (
         "editor.highlightOccurrences",
         &[
             "Wash the other places the word under the caret appears in the lines on",

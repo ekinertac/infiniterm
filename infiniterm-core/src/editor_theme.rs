@@ -129,7 +129,12 @@ pub struct EditorColors {
     pub selection: String,
     pub selection_text: String,
     pub gutter: String,
+    /// The wavy line under a misspelled word (#850): the theme's red.
+    pub misspelled: String,
 }
+
+/// The misspelled line's colour for a theme without a red: the red git uses.
+const MISSPELLED_FALLBACK: &str = "#f85149";
 
 fn parse_hex(s: &str) -> Option<[u8; 3]> {
     let h = s.strip_prefix('#')?;
@@ -204,6 +209,10 @@ pub fn editor_colors(
             .or_else(|| get("background").map(String::from))
             .unwrap_or_else(|| "#000000".to_string()),
         gutter: get("brightBlack").unwrap_or(&chrome.text_faint).to_string(),
+        misspelled: get("red")
+            .or_else(|| get("brightRed"))
+            .unwrap_or(MISSPELLED_FALLBACK)
+            .to_string(),
     }
 }
 

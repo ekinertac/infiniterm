@@ -192,6 +192,7 @@ impl AppView {
                 tabs.autosave(now);
             }
             tabs.editing = editing;
+            let cover = self.model.covers.contains_key(&card.id);
             let Some(body) = self.editor_for(&card.id) else {
                 continue;
             };
@@ -260,6 +261,14 @@ impl AppView {
                     body.sticky_scroll,
                 ) = polish;
                 body.rulers.clone_from(&e.rulers);
+                body.mark_dirty();
+            }
+            // Spell check (#850): prose, untitled and in-place editors only.
+            let spellcheck = e.spellcheck
+                && !is_diff
+                && infiniterm_editor::spell::checks(body.path.as_deref(), cover);
+            if body.spellcheck != spellcheck {
+                body.spellcheck = spellcheck;
                 body.mark_dirty();
             }
             body.trim_on_save = e.trim_trailing_whitespace_on_save;
@@ -646,6 +655,22 @@ impl AppView {
             EditorAction::GoToFile => {
                 let (root, files) = self.project_files(&card);
                 self.model.open_quick_files(card_id, &root, files);
+            }
+            EditorAction::Spelling(act) => {
+                use infiniterm_core::model::SpellAct;
+                let Some(body) = self.editor_for(card_id) else {
+                    return;
+                };
+                match act {
+                    SpellAct::Next => body.spell_next(),
+                    SpellAct::Learn => body.spell_accept(true),
+                    SpellAct::Ignore => body.spell_accept(false),
+                    SpellAct::Use(i) => body.spell_use(i, now),
+                    SpellAct::Suggest => match body.spell_offer() {
+                        Some((word, guesses)) => self.model.open_spelling(card_id, &word, guesses),
+                        None => self.model.notify("no misspelled word at the caret"),
+                    },
+                }
             }
             EditorAction::Change(act) => {
                 use infiniterm_core::model::ChangeAct;

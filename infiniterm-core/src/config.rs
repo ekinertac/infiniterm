@@ -331,6 +331,9 @@ pub struct Editor {
     /// The caret's colour. Empty follows the theme.
     pub cursor_color: String,
     pub wrap: Wrap,
+    /// Misspelled words underlined in plain text and Markdown (#850), off by
+    /// default; macOS only, the platform's checker.
+    pub spellcheck: bool,
     // The polish set (#778). Every one is off by default: each changes how
     // the editor looks or what a save does to the file.
     /// The other places the word under the caret (or the selected text)
@@ -688,6 +691,7 @@ pub fn default_config() -> Config {
             selection_text_color: String::new(),
             cursor_color: String::new(),
             wrap: Wrap::Prose,
+            spellcheck: false,
             highlight_occurrences: false,
             indent_guides: false,
             smooth_caret: false,
@@ -1071,6 +1075,7 @@ pub fn merge_config(raw: &Value) -> Config {
                     ("never", Wrap::Never),
                 ],
             ),
+            spellcheck: bool_(e.get("spellcheck"), d.editor.spellcheck),
             highlight_occurrences: bool_(
                 e.get("highlightOccurrences"),
                 d.editor.highlight_occurrences,
@@ -1747,6 +1752,13 @@ mod tests {
             !e.formatters.contains_key("go"),
             "a blank command is no command"
         );
+    }
+
+    // Spell check is opt-in (#850).
+    #[test]
+    fn spellcheck_is_off_by_default_and_read_when_set() {
+        assert!(!m(json!({})).editor.spellcheck);
+        assert!(m(json!({"editor.spellcheck": true})).editor.spellcheck);
     }
 
     // The polish set is opt-in, every key of it (#778); rulers keep whole

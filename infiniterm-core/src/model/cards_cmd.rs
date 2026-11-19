@@ -8,7 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use super::{ChangeAct, FilesJob, FindToggle, TerminalAction, TreeAct};
+use super::{ChangeAct, FilesJob, FindToggle, SpellAct, TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -1447,6 +1447,7 @@ impl Model {
             Source::Files => self.quick_open_pick(id),
             Source::Grep => self.grep_pick(id),
             Source::Branches => self.branch_pick(id),
+            Source::Spelling => self.spelling_pick(id),
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
             Source::SavedWorkspaces => self
@@ -2034,6 +2035,34 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     ] {
         r.register(id, label, move |m| {
             m.editor_action(EditorAction::Change(act))
+        });
+    }
+    // Spell check (#850): on the misspelled word at the caret, which a
+    // right-click on one selects; the menu offers the same.
+    for (id, label, act) in [
+        (
+            "editor.spelling.next",
+            "Editor: go to the next misspelled word",
+            SpellAct::Next,
+        ),
+        (
+            "editor.spelling.suggest",
+            "Editor: spelling suggestions…",
+            SpellAct::Suggest,
+        ),
+        (
+            "editor.spelling.learn",
+            "Editor: learn spelling",
+            SpellAct::Learn,
+        ),
+        (
+            "editor.spelling.ignore",
+            "Editor: ignore spelling",
+            SpellAct::Ignore,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.editor_action(EditorAction::Spelling(act))
         });
     }
     r.register("editor.goToLine", "Editor: go to a line…", |m| {

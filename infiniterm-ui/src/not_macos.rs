@@ -1,9 +1,10 @@
 //! What the macOS-only ui modules answer on every other platform: the same
 //! public names, doing nothing, so no call site needs a `cfg`.
 //!
-//! Responsibility: keep the Windows build compiling while seven modules that
+//! Responsibility: keep the Windows build compiling while eight modules that
 //! talk to AppKit and CoreText (finder_service, fullscreen, icon_font,
-//! instance_icon, middle_drag, native_menu, title_drag) stay Mac code. Where
+//! instance_icon, middle_drag, native_menu, spelling, title_drag) stay Mac
+//! code. Where
 //! it fits: `main.rs` declares the real modules on macOS and imports these
 //! under the same names elsewhere, so `crate::fullscreen::toggle()` resolves
 //! either way. Depends on: only core types; nothing here links a native
@@ -26,6 +27,8 @@
 //!   `ui.windowColor`, and a Windows instance is single by design (the pipe
 //!   is the lock). A taskbar overlay would be the way if that ever changes.
 //! - `finder_service`: no "open folder in infiniterm" service.
+//! - `spelling`: no spell check in the editor (#850); Hunspell or the
+//!   platform's own checker would be the way.
 //! - `title_drag`: an AppKit view patch on the Mac. Here: Linux moves and
 //!   maximises the window through gpui from the bare bar; Windows draws its
 //!   own caption.
@@ -286,4 +289,31 @@ pub mod native_menu {
     pub fn pop_up(_rows: &[Row]) -> Option<i64> {
         None
     }
+}
+
+pub mod spelling {
+    use std::ops::Range;
+
+    /// No checker here, so the editor never asks.
+    pub const AVAILABLE: bool = false;
+
+    pub fn generation() -> u64 {
+        0
+    }
+
+    pub fn language_of(_text: &str) -> Option<String> {
+        None
+    }
+
+    pub fn misspelled(_text: &str, _language: Option<&str>) -> Vec<Range<usize>> {
+        vec![]
+    }
+
+    pub fn guesses(_word: &str, _language: Option<&str>) -> Vec<String> {
+        vec![]
+    }
+
+    pub fn learn(_word: &str) {}
+
+    pub fn ignore(_word: &str) {}
 }

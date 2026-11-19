@@ -30,6 +30,14 @@ pub const BRANCH_PICK: &str = "git.switchBranch.to:";
 /// The command of the row a terminal outside any repository shows instead.
 const GIT_INIT: &str = "git.init";
 
+/// The command of a spelling suggestion row (#850), before the guess's index
+/// (`editor.spelling.use:0`); `Model::menu_spell_pick` takes it apart.
+pub const SPELL_PICK: &str = "editor.spelling.use:";
+
+/// The commands under the suggestions.
+const SPELL_LEARN: &str = "editor.spelling.learn";
+const SPELL_IGNORE: &str = "editor.spelling.ignore";
+
 /// The place that was right-clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Area {
@@ -66,6 +74,9 @@ pub enum Def {
     Separator,
     /// The card's git row, built when the menu opens (`git_rows`).
     Git,
+    /// An editor's spelling rows (#850), built when the menu opens
+    /// (`spelling_rows`): nothing unless the caret is on a misspelled word.
+    Spelling,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -247,6 +258,9 @@ const TAB: &[Def] = &[
 ];
 
 const EDITOR_TOP: &[Def] = &[
+    // On a misspelled word its fixes come first, where the eye already is.
+    Def::Spelling,
+    Def::Separator,
     titled("card.save", "Save"),
     titled("card.find", "Find\u{2026}"),
     titled("editor.goToSymbol", "Go to Symbol\u{2026}"),
@@ -483,6 +497,10 @@ pub struct Source<'a> {
     /// The branches of the focused card's repository, asked only by a menu
     /// with a `Def::Git` row; `None`: the card's folder is in no repository.
     pub git: &'a dyn Fn() -> Option<Vec<Branch>>,
+    /// The checker's guesses for the misspelled word at the focused editor's
+    /// caret, asked only by a menu with a `Def::Spelling` row; `None`: the
+    /// caret is on no misspelled word.
+    pub spelling: &'a dyn Fn() -> Option<Vec<String>>,
 }
 
 /// "Card: rename\u{2026}" to "Rename\u{2026}": the part after the domain, its first
@@ -525,6 +543,7 @@ fn build(defs: &[Def], src: &Source) -> Vec<Row> {
                 });
             }
             Def::Git => rows.extend(git_rows((src.git)().as_deref())),
+            Def::Spelling => rows.extend(spelling_rows((src.spelling)().as_deref())),
             Def::Submenu { title, items } => {
                 let inner = tidy(build(items, src));
                 if !inner.is_empty() {
@@ -576,6 +595,51 @@ pub fn git_rows(branches: Option<&[Branch]>) -> Vec<Row> {
     }]
 }
 
+/// The spelling rows (#850), TextEdit's: the guesses, best first, or a
+/// greyed "No Guesses Found", then Learn and Ignore. Nothing when the caret
+/// is on no misspelled word.
+pub fn spelling_rows(guesses: Option<&[String]>) -> Vec<Row> {
+    let Some(guesses) = guesses else {
+        return vec![];
+    };
+    let mut rows: Vec<Row> = guesses
+        .iter()
+        .take(SPELL_GUESSES_SHOWN)
+        .enumerate()
+        .map(|(i, g)| Row::Item {
+            command: format!("{SPELL_PICK}{i}"),
+            title: g.clone(),
+            chord: None,
+            enabled: true,
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(Row::Item {
+            command: String::new(),
+            title: "No Guesses Found".into(),
+            chord: None,
+            enabled: false,
+        });
+    }
+    rows.push(Row::Separator);
+    for (command, title) in [
+        (SPELL_LEARN, "Learn Spelling"),
+        (SPELL_IGNORE, "Ignore Spelling"),
+    ] {
+        rows.push(Row::Item {
+            command: command.into(),
+            title: title.into(),
+            chord: None,
+            enabled: true,
+        });
+    }
+    rows
+}
+
+/// Guesses the menu shows; the palette (`editor.spelling.suggest`) lists
+/// them all. TextEdit stops at about this many too.
+const SPELL_GUESSES_SHOWN: usize = 6;
+
 /// No separator first, last or twice in a row: hiding a row can leave one
 /// stranded.
 fn tidy(rows: Vec<Row>) -> Vec<Row> {
@@ -606,6 +670,7 @@ pub fn command_ids(area: Area) -> Vec<&'static str> {
                 Def::Command(c) => out.push(c.id),
                 Def::Submenu { items, .. } => walk(items, out),
                 Def::Git => out.push(GIT_INIT),
+                Def::Spelling => out.extend([SPELL_LEARN, SPELL_IGNORE]),
                 Def::Separator => {}
             }
         }
@@ -624,7 +689,7 @@ pub fn clauses(area: Area) -> Vec<&'static str> {
                     out.extend([c.show, c.enable].into_iter().filter(|s| !s.is_empty()));
                 }
                 Def::Submenu { items, .. } => walk(items, out),
-                Def::Separator | Def::Git => {}
+                Def::Separator | Def::Git | Def::Spelling => {}
             }
         }
     }
@@ -650,6 +715,7 @@ mod tests {
                 chord: &|id| (id == "card.close").then(|| "cmd+w".to_string()),
                 shown: &|c| Some(c.to_string()),
                 git: &|| None,
+                spelling: &|| None,
             },
         )
     }
@@ -667,6 +733,7 @@ mod tests {
                 chord: &|_| None,
                 shown: &|c| (c == "cmd+v").then(|| "ctrl+shift+v".to_string()),
                 git: &|| None,
+                spelling: &|| None,
             },
         );
         let chord_of = |id: &str| {
@@ -779,9 +846,47 @@ mod tests {
                 chord: &|_| None,
                 shown: &|_| None,
                 git: &|| None,
+                spelling: &|| None,
             },
         );
         assert!(rows.is_empty(), "{rows:?}");
+    }
+
+    // #850: on a misspelled word the editor's menu starts with the guesses,
+    // each carrying its index, then Learn and Ignore; elsewhere, nothing.
+    #[test]
+    fn an_editor_menu_on_a_misspelled_word_starts_with_its_fixes() {
+        let editor = Context {
+            card_kind: "editor",
+            ..ctx()
+        };
+        let guesses = vec!["the".to_string(), "ten".to_string()];
+        let rows = rows(
+            Area::Editor,
+            &Source {
+                context: &editor,
+                label: &|id| Some(format!("Card: {id}")),
+                chord: &|_| None,
+                shown: &|_| None,
+                git: &|| None,
+                spelling: &|| Some(guesses.clone()),
+            },
+        );
+        let title = |i: usize| match &rows[i] {
+            Row::Item { command, title, .. } => (command.clone(), title.clone()),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(title(0), (format!("{SPELL_PICK}0"), "the".into()));
+        assert_eq!(title(1), (format!("{SPELL_PICK}1"), "ten".into()));
+        assert_eq!(rows[2], Row::Separator);
+        assert_eq!(title(3).1, "Learn Spelling");
+        assert_eq!(title(4).1, "Ignore Spelling");
+        assert_eq!(rows[5], Row::Separator);
+        assert!(spelling_rows(None).is_empty());
+        let none = spelling_rows(Some(&[]));
+        assert!(
+            matches!(&none[0], Row::Item { enabled: false, title, .. } if title == "No Guesses Found")
+        );
     }
 
     fn branch(refname: &str, current: bool) -> Branch {
@@ -812,6 +917,7 @@ mod tests {
                 chord: &|_| None,
                 shown: &|_| None,
                 git: &|| Some(branches.clone()),
+                spelling: &|| None,
             },
         );
         let sub = built

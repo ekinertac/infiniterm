@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-19
+
+- The editor can check spelling on the Mac: turn on `editor.spellcheck` and misspelled words in plain text and Markdown files, untitled editors and the editor `EDITOR=ift` opens (Claude Code's Ctrl+G, `git commit`) get a wavy red underline. Code, Markdown code blocks and inline code, URLs, paths and identifiers are not checked. Right-click a misspelled word for suggestions, Learn Spelling and Ignore Spelling; the palette has the same as commands, plus "go to the next misspelled word". It uses the system's dictionaries and checks a text in its main language, so a Mac set up with several languages still catches typos.
+
 ### 2026-11-17
 
 - `ift phone add` warns when the pairing code holds only this machine's bare hostname (no `--host`, no Tailscale name), which a phone usually cannot reach, and says to pair again with `--host <address>` or to join Tailscale.
