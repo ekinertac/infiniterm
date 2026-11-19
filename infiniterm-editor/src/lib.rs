@@ -13,6 +13,7 @@ pub mod jumps;
 pub mod language;
 pub mod lsp;
 pub mod search;
+pub mod spell;
 pub mod status;
 pub mod symbols;
 pub mod syntax_select;

@@ -60,6 +60,9 @@ pub enum Source {
     /// `git.switchBranch` (#750): the branches of the focused card's
     /// repository; a pick runs `git switch`.
     Branches,
+    /// `editor.spelling.suggest` (#850): the spell checker's guesses for the
+    /// misspelled word at the caret, best first; a pick replaces the word.
+    Spelling,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -96,6 +99,7 @@ impl Source {
             Source::Files => "files",
             Source::Grep => "grep",
             Source::Branches => "branches",
+            Source::Spelling => "spelling",
         }
     }
 
@@ -136,6 +140,8 @@ impl Source {
                 | Source::Symbols
                 // The current branch on top, then git's newest-commit order.
                 | Source::Branches
+                // The checker's best guess first.
+                | Source::Spelling
         )
     }
 
@@ -168,6 +174,7 @@ impl Source {
             Source::Files => "Go to file…",
             Source::Grep => "Narrow the matches…",
             Source::Branches => "Switch to branch…",
+            Source::Spelling => "Replace the word with…",
         }
     }
 }
@@ -309,6 +316,55 @@ impl Model {
             rows,
         });
         self.open_palette(Source::Branches);
+    }
+
+    /// The spelling palette (#850) over the checker's `guesses` for `word`,
+    /// the misspelled word at the caret of editor card `card_id`.
+    pub fn open_spelling(&mut self, card_id: &str, word: &str, guesses: Vec<String>) {
+        if guesses.is_empty() {
+            self.notify(format!(
+                "no spelling suggestions for \u{201c}{word}\u{201d}"
+            ));
+            return;
+        }
+        self.spelling = Some(super::SpellingState {
+            card_id: card_id.into(),
+            guesses,
+        });
+        self.open_palette(Source::Spelling);
+    }
+
+    /// A spelling pick (the guess's index as the id): the card's editor
+    /// replaces the word with it.
+    pub fn spelling_pick(&mut self, id: &str) {
+        let Some(s) = self.spelling.take() else {
+            return;
+        };
+        if let Ok(i) = id.parse::<usize>() {
+            self.effects.push(super::Effect::Editor {
+                card_id: s.card_id,
+                action: super::EditorAction::Spelling(super::SpellAct::Use(i)),
+            });
+        }
+    }
+
+    /// A suggestion row of an editor's right-click menu (#850): the guess's
+    /// index after `SPELL_PICK`, for the focused card. False for any other
+    /// command.
+    pub fn menu_spell_pick(&mut self, command: &str) -> bool {
+        let Some(i) = command
+            .strip_prefix(crate::context_menu::SPELL_PICK)
+            .and_then(|i| i.parse::<usize>().ok())
+        else {
+            return false;
+        };
+        self.with_active_card(|m, id| {
+            m.effects.push(super::Effect::Editor {
+                card_id: id,
+                action: super::EditorAction::Spelling(super::SpellAct::Use(i)),
+            });
+        });
+        true
     }
 
     /// A branch pick (its full ref name as the id): the current branch is
@@ -695,6 +751,17 @@ impl Model {
                     } else {
                         None
                     },
+                })
+                .collect(),
+            // The guess's index as the id: the editor holds the word it is for.
+            Source::Spelling => self
+                .spelling
+                .iter()
+                .flat_map(|s| s.guesses.iter().enumerate())
+                .map(|(i, g)| PaletteItem {
+                    id: i.to_string(),
+                    label: g.clone(),
+                    hint: None,
                 })
                 .collect(),
             // `path:line  the line`, the id carrying the two apart for the pick.

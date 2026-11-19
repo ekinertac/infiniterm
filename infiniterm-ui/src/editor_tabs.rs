@@ -128,6 +128,14 @@ impl EditorTabs {
         self.active_body_ref().and_then(|b| b.tree_row_at(below))
     }
 
+    /// A right-click on the active tab's text: selects the misspelled word
+    /// under it, if any (`EditorBody::select_misspelled_at`).
+    pub fn select_misspelled_at(&mut self, local: Point) -> bool {
+        let below = self.below_strip(local);
+        self.active_body()
+            .is_some_and(|b| b.select_misspelled_at(below))
+    }
+
     /// Lights (or clears) the tree row a menu is open on.
     pub fn set_menu_row(&mut self, row: Option<usize>) {
         if let Some(b) = self.active_body() {

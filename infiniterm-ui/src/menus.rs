@@ -107,7 +107,14 @@ impl AppView {
                                 lit = Some(id.clone());
                                 Area::Tree
                             }
-                            None => Area::Editor,
+                            None => {
+                                // On a misspelled word: it is selected, and
+                                // the menu opens with its fixes (#850).
+                                if let Some(t) = self.editor_tabs_for(&id) {
+                                    t.select_misspelled_at(local);
+                                }
+                                Area::Editor
+                            }
                         }
                     }
                     // A tab of the strip: its menu. A page's right-click is
@@ -185,8 +192,9 @@ impl AppView {
                 self.model.show_workspace(ws);
                 self.perform_effects();
             }
-            // A Switch Branch row is a ref, not a registered command (#754).
-            if self.model.menu_branch_pick(&id) {
+            // A Switch Branch row is a ref, not a registered command (#754);
+            // a spelling suggestion is an index (#850).
+            if self.model.menu_branch_pick(&id) || self.model.menu_spell_pick(&id) {
                 self.perform_effects();
             } else {
                 self.run_command(&id);
@@ -231,6 +239,19 @@ impl AppView {
         self.sync_ui_context();
         self.sync_platform_keys();
         let ctx = self.model.key_context();
+        // The focused editor's guesses for the word at its caret (#850),
+        // asked before the rows borrow the model.
+        let spelling = match area {
+            Area::Editor => self
+                .model
+                .selection
+                .focused_id
+                .clone()
+                .and_then(|id| self.editor_for(&id))
+                .and_then(|b| b.spell_offer())
+                .map(|(_, guesses)| guesses),
+            _ => None,
+        };
         let rows = {
             let registry = &self.registry;
             let model = &self.model;
@@ -259,6 +280,7 @@ impl AppView {
                         .ok()
                         .map(|(_, rows)| rows)
                     },
+                    spelling: &|| spelling.clone(),
                 },
             )
         };

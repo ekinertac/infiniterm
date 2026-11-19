@@ -74,7 +74,7 @@ mod native_menu;
 #[cfg(not(target_os = "macos"))]
 mod not_macos;
 #[cfg(not(target_os = "macos"))]
-use not_macos::{finder_service, fullscreen, icon_font, instance_icon, title_drag};
+use not_macos::{finder_service, fullscreen, icon_font, instance_icon, spelling, title_drag};
 mod omnibox;
 mod overlays;
 mod own_window;
@@ -82,6 +82,8 @@ mod page_body;
 mod paint;
 mod runtime;
 mod scrollbar;
+#[cfg(target_os = "macos")]
+mod spelling;
 mod switcher_view;
 mod tab_drag;
 mod tab_drop;

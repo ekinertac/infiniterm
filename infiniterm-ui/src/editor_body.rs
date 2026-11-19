@@ -50,6 +50,7 @@ use infiniterm_editor::highlight::{Highlighting, Span};
 use infiniterm_editor::jumps::Jumps;
 use infiniterm_editor::language::Language;
 use infiniterm_editor::search::Search;
+use infiniterm_editor::spell::Spell;
 use infiniterm_editor::wrap::wrap_line;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver};
@@ -78,6 +79,21 @@ const STATUS_FIELD_GAP: &str = "   ";
 /// A blink is slower than the terminal's: CodeMirror's 1200 ms period.
 const BLINK_MS: f64 = 600.;
 const DISK_POLL_MS: f64 = 2000.;
+/// Spell check waits for a pause in typing this long, so a word is not
+/// underlined while it is still being typed.
+const SPELL_PAUSE_MS: f64 = 400.;
+/// One idle step's share of a spell pass: the checker takes tens of
+/// microseconds a line, so 32 lines stay well inside a 16 ms frame, and a
+/// large file's known lines are walked 4000 at a time.
+const SPELL_BUDGET: infiniterm_editor::spell::Budget = infiniterm_editor::spell::Budget {
+    asks: 32,
+    walk: 4000,
+};
+/// How much of the text the language guess reads: enough to tell any
+/// language, little enough to redo after every pause in typing.
+const SPELL_LANGUAGE_SAMPLE: usize = 20_000;
+/// The wavy line under a misspelled word, in world px before the zoom.
+const SPELL_UNDERLINE_PX: f64 = 1.;
 
 /// How often a host file's HEAD is asked for again: a commit is rare and each
 /// ask is a `git show` over the link, so far slower than the disk poll.
@@ -341,6 +357,18 @@ pub struct EditorBody {
     /// Alt+Z's choice for this tab (#798), over `editor.wrap`; not saved.
     pub wrap_override: Option<bool>,
     pub highlight_line: bool,
+    /// Spell check (#850): whether this buffer is checked, set by the
+    /// reconcile (`editor.spellcheck` and `spell::checks`), the misspelled
+    /// words found so far, when the next pass may start (a pause in typing),
+    /// and the suggestions last offered for the word at the caret, with the
+    /// buffer version and range they were for (`spell_use` replaces it).
+    pub spellcheck: bool,
+    spell: Spell,
+    spell_due: Option<(infiniterm_editor::spell::Key, f64)>,
+    /// The text's language (`spelling::language_of`) and the version it was
+    /// read from.
+    spell_language: (Option<infiniterm_editor::spell::Key>, Option<String>),
+    spell_offer: Option<(u64, std::ops::Range<usize>, Vec<String>)>,
     /// The polish set (#778), set by the reconcile, all off by default:
     /// `editor.highlightOccurrences`, `indentGuides`, `smoothCaret` (already
     /// false under reduced motion), `rulers`, `whitespaceInSelection`,
@@ -595,6 +623,11 @@ impl EditorBody {
             wrap: false,
             wrap_override: None,
             highlight_line: false,
+            spellcheck: false,
+            spell: Spell::default(),
+            spell_due: None,
+            spell_language: (None, None),
+            spell_offer: None,
             highlight_occurrences: false,
             indent_guides: false,
             smooth_caret: false,
@@ -622,6 +655,7 @@ impl EditorBody {
                 selection: "#e39500".into(),
                 selection_text: "#0e101a".into(),
                 gutter: "#5a6472".into(),
+                misspelled: "#f85149".into(),
             },
             rules: vec![],
             metrics: metrics.clone(),
@@ -927,6 +961,7 @@ impl EditorBody {
         }
         self.take_host_answers(now);
         self.lsp_poll();
+        self.spell_idle(now);
         if self.draft_due.is_some_and(|due| now >= due) {
             self.draft_due = None;
             if self.is_dirty() {
@@ -993,6 +1028,158 @@ impl EditorBody {
             self.refresh_git_head();
             self.dirty = true;
         }
+    }
+
+    /// Spell check's share of the idle step (#850): once typing pauses, a
+    /// slice of the pass over the text; the underlines change when it ends.
+    fn spell_idle(&mut self, now: f64) {
+        if !self.spellcheck || !crate::spelling::AVAILABLE || self.image.is_some() {
+            return;
+        }
+        let key = (self.buffer.version, self.loads);
+        let generation = crate::spelling::generation();
+        if self.spell.is_done(key, generation) {
+            return;
+        }
+        match self.spell_due {
+            Some((k, at)) if k == key => {
+                if now < at {
+                    return;
+                }
+            }
+            _ => {
+                self.spell_due = Some((key, now + SPELL_PAUSE_MS));
+                return;
+            }
+        }
+        // The text's language, once per version; a different one makes
+        // every answer so far wrong.
+        if self.spell_language.0 != Some(key) {
+            let sample: String = self
+                .buffer
+                .text()
+                .chars()
+                .take(SPELL_LANGUAGE_SAMPLE)
+                .collect();
+            let language = crate::spelling::language_of(&sample);
+            if language != self.spell_language.1 {
+                self.spell.clear();
+            }
+            self.spell_language = (Some(key), language);
+        }
+        let language = self.spell_language.1.clone();
+        let buffer = &self.buffer;
+        let finished = self.spell.run(
+            key,
+            generation,
+            buffer.line_count(),
+            &|l| buffer.line(l),
+            infiniterm_editor::spell::is_markdown(self.path.as_deref()),
+            SPELL_BUDGET,
+            &mut |text| crate::spelling::misspelled(text, language.as_deref()),
+        );
+        if finished {
+            self.spell_due = None;
+            self.dirty = true;
+        }
+    }
+
+    /// The misspelled word at the caret, or at the start of the selection
+    /// (a right-click or Next selects one): its char range in the buffer
+    /// and its text.
+    fn spell_word(&self) -> Option<(std::ops::Range<usize>, String)> {
+        if !self.spellcheck {
+            return None;
+        }
+        let pos = self
+            .buffer
+            .selection()
+            .map_or(self.buffer.cursor(), |s| s.start);
+        let line = self.buffer.line_of(pos);
+        let text = self.buffer.line(line);
+        let r = self.spell.word_at(line, &text, self.buffer.col_of(pos))?;
+        let start = self.buffer.line_start(line);
+        let word = text.chars().skip(r.start).take(r.len()).collect();
+        Some((start + r.start..start + r.end, word))
+    }
+
+    /// The checker's guesses for the misspelled word at the caret, for the
+    /// right-click menu and the palette: the word and its guesses, kept for
+    /// `spell_use`. `None` off a misspelled word.
+    pub fn spell_offer(&mut self) -> Option<(String, Vec<String>)> {
+        let (range, word) = self.spell_word()?;
+        let guesses = crate::spelling::guesses(&word, self.spell_language.1.as_deref());
+        self.spell_offer = Some((self.buffer.version, range, guesses.clone()));
+        Some((word, guesses))
+    }
+
+    /// Replaces the offered word with guess `i`, unless the text changed
+    /// since the offer.
+    pub fn spell_use(&mut self, i: usize, now: f64) {
+        let Some((version, range, guesses)) = self.spell_offer.take() else {
+            return;
+        };
+        let Some(guess) = guesses.get(i).filter(|_| version == self.buffer.version) else {
+            return;
+        };
+        if self.read_only {
+            return;
+        }
+        self.buffer.replace_range(range, guess, now);
+        self.now_dirty(now);
+        self.ensure_cursor_visible();
+    }
+
+    /// Selects the next misspelled word after the caret, wrapping to the top.
+    pub fn spell_next(&mut self) {
+        if !self.spellcheck {
+            return self.note("spell check is off for this file");
+        }
+        let pos = self.buffer.cursor();
+        let line = self.buffer.line_of(pos);
+        let col = self.buffer.col_of(pos);
+        let buffer = &self.buffer;
+        let Some((l, r)) = self.spell.next_after(line, col, &|l| buffer.line(l)) else {
+            return self.note("no misspelled words");
+        };
+        let start = self.buffer.line_start(l);
+        self.note_jump();
+        self.buffer.select_range(start + r.start..start + r.end);
+        self.ensure_cursor_visible();
+        self.dirty = true;
+    }
+
+    /// Learn (into the user's dictionary) or Ignore (until the app quits)
+    /// the misspelled word at the caret.
+    pub fn spell_accept(&mut self, learn: bool) {
+        let Some((_, word)) = self.spell_word() else {
+            return self.note("no misspelled word at the caret");
+        };
+        if learn {
+            crate::spelling::learn(&word);
+        } else {
+            crate::spelling::ignore(&word);
+        }
+    }
+
+    /// A right-click at `local`: a misspelled word under it is selected, so
+    /// the menu's spelling rows are for it (TextEdit does the same). True
+    /// when one was.
+    pub fn select_misspelled_at(&mut self, local: Point) -> bool {
+        if !self.spellcheck || self.tree_row_at(local).is_some() {
+            return false;
+        }
+        let idx = self.index_at(local, self.world);
+        let line = self.buffer.line_of(idx);
+        let text = self.buffer.line(line);
+        let col = self.buffer.col_of(idx);
+        let Some(r) = self.spell.word_at(line, &text, col) else {
+            return false;
+        };
+        let start = self.buffer.line_start(line);
+        self.buffer.select_range(start + r.start..start + r.end);
+        self.dirty = true;
+        true
     }
 
     /// The file changing under the editor: the theme picker writes
@@ -4827,6 +5014,30 @@ impl CardBody for EditorBody {
                         }
                     };
                     let _ = shaped.paint(point(text_x, y), line_h, window, cx);
+                    // Misspelled words (#850): a wavy line along the bottom of
+                    // the cells, in the row's part of each word.
+                    if self.spellcheck {
+                        let thickness = s(SPELL_UNDERLINE_PX).max(px(1.));
+                        let style = gpui::UnderlineStyle {
+                            thickness,
+                            color: Some(hex(&self.colors.misspelled)),
+                            wavy: true,
+                        };
+                        for r in self.spell.ranges(line_no, &line_text) {
+                            let a = r.start.max(vrow.a);
+                            let b = r.end.min(vrow.b);
+                            if b > a {
+                                window.paint_underline(
+                                    point(
+                                        text_x + cell_w * (a - vrow.a) as f32,
+                                        y + line_h - thickness * 3.,
+                                    ),
+                                    cell_w * (b - a) as f32,
+                                    &style,
+                                );
+                            }
+                        }
+                    }
                 }
                 // The cursor: a block 0.6 em wide in the cursor colour, on when
                 // focused and the blink says so; hollow when the card is not

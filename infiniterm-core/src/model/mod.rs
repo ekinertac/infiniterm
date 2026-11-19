@@ -565,6 +565,8 @@ pub enum EditorAction {
     /// the enclosing syntax node, and steps back the way it grew.
     ExpandSelection,
     ShrinkSelection,
+    /// Spell check's commands (#850).
+    Spelling(SpellAct),
 }
 
 /// The find panel's switches: what a query means, and where it looks.
@@ -637,6 +639,30 @@ pub struct BranchesState {
     /// The repository root, absolute.
     pub repo: String,
     pub rows: Vec<crate::git_branches::Branch>,
+}
+
+/// What the spelling palette lists (#850) and which card a pick corrects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpellingState {
+    pub card_id: String,
+    pub guesses: Vec<String>,
+}
+
+/// Spell check's commands (#850), each on the misspelled word at the caret
+/// (a right-click on one selects it first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpellAct {
+    /// Select the next misspelled word, wrapping to the top.
+    Next,
+    /// The checker's guesses in the palette.
+    Suggest,
+    /// Into the user's dictionary, for every Mac app.
+    Learn,
+    /// Not flagged again until the app quits.
+    Ignore,
+    /// Replace the word with this guess, by its index in the guesses the
+    /// editor last offered (the palette's or the menu's).
+    Use(usize),
 }
 
 /// What a reviewer does with the parts of a file that changed on disk.
@@ -1113,6 +1139,8 @@ pub struct Model {
     pub quick_open: Option<QuickOpen>,
     /// The branches "Git: switch branch…" lists while its palette is up.
     pub branches: Option<BranchesState>,
+    /// The guesses the spelling palette lists while it is up (#850).
+    pub spelling: Option<SpellingState>,
     /// The matches Find in Files (Cmd+Shift+F) lists while its palette is up.
     pub grep: Option<GrepState>,
     /// What the typed find and replace of a project-wide search say, between
@@ -1345,6 +1373,7 @@ impl Model {
             symbols: None,
             quick_open: None,
             branches: None,
+            spelling: None,
             grep: None,
             files_job: None,
             theme_current: None,

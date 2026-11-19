@@ -372,6 +372,7 @@ mod tests {
                 chord: &|_| None,
                 shown: &|_| None,
                 git: &|| None,
+                spelling: &|| None,
             },
         );
         let canvas = built
