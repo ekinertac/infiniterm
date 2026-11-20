@@ -8,7 +8,7 @@
 use crate::fonts::{installed_families, terminal_family_of, weight_of};
 #[cfg(unix)]
 use crate::terminal_body::LostLink;
-use crate::terminal_body::{Metrics, TerminalBody, READOPT_POLL_MS};
+use crate::terminal_body::{saved_session_tail, Metrics, TerminalBody, READOPT_POLL_MS};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
 use infiniterm_core::backend::Panes;
@@ -486,16 +486,31 @@ impl AppView {
                 // the path is made now so the new shell can write to it.
                 let history = infiniterm_core::shell_history::history_file(&card.id);
                 let _ = infiniterm_core::shell_history::ensure_file(&history);
-                if let Some((ring, when)) = card
+                let lost = card
                     .session
                     .as_deref()
-                    .and_then(|s| self.backend.pty.take_ring(s))
-                {
+                    .and_then(|s| self.backend.pty.take_ring(s));
+                // A card opened from a saved workspace that kept its agent
+                // (#852) has no ring, only the session to offer. Once: the
+                // flag goes with this spawn.
+                if card.offer_resume {
+                    if let Some(c) = self.model.card_mut(&card.id) {
+                        c.offer_resume = false;
+                    }
+                }
+                if lost.is_some() || card.offer_resume {
                     // The agent's own resume command (`resume_command`).
                     let resume = card.agent_session.as_deref().and_then(|id| {
                         infiniterm_core::agent_state::resume_command(card.agent_kind.as_deref(), id)
                     });
-                    body.feed_lost_session(&ring, &when, resume.as_deref());
+                    match &lost {
+                        Some((ring, when)) => body.feed_lost_session(ring, when, resume.as_deref()),
+                        None => {
+                            if let Some(cmd) = resume.as_deref() {
+                                body.feed_replay(saved_session_tail(cmd).as_bytes());
+                            }
+                        }
+                    }
                     // And the same command as the card's last history entry,
                     // so Up in the new shell is all it takes.
                     if let Some(cmd) = resume {

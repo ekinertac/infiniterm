@@ -134,7 +134,8 @@ impl Model {
                         "\"{stem}\" is already saved: add --replace to write over it"
                     ));
                 }
-                let Some(text) = self.workspace_snapshot_text(&id, &stem) else {
+                // Agent sessions as the setting says (#852).
+                let Some(text) = self.workspace_snapshot_text(&id, &stem, false) else {
                     return err(format!("no workspace {workspace}"));
                 };
                 if let Err(e) = crate::saved_workspace::write(dir, &stem, &text) {

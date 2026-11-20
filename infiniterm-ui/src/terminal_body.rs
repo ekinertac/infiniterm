@@ -2085,9 +2085,27 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
     out
 }
 
+/// What a card opened from a saved workspace that kept its agent (#852)
+/// shows before the new shell's prompt: where it came from and the command
+/// that resumes the agent, plain so it selects and pastes as typed. No
+/// ring and no dead program's modes to undo, unlike `lost_session_tail`.
+pub fn saved_session_tail(resume: &str) -> String {
+    format!(
+        "\x1b[2m[opened from a saved workspace; this is a new shell]\x1b[0m\r\n\x1b[2mto pick the agent up where it was:\x1b[0m {resume}\r\n"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The resume command is on its own, undimmed, so it copies as typed.
+    #[test]
+    fn a_card_from_a_saved_workspace_says_so_and_offers_the_resume() {
+        let tail = saved_session_tail("claude --resume a1");
+        assert!(tail.contains("saved workspace"));
+        assert!(tail.ends_with("\x1b[0m claude --resume a1\r\n"));
+    }
 
     /// A joined terminal's paths are the host's (#555): this Mac's disk says
     /// nothing about them, and checking it dropped every click.

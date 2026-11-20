@@ -257,6 +257,11 @@ pub struct Cards {
     /// Whether a plain new card (Cmd+T) starts in the directory of the
     /// terminal card it was opened from instead of `starting_dir` (#509).
     pub new_card_inherits_directory: bool,
+    /// Whether every saved workspace keeps its cards' agent sessions, so a
+    /// card opened from it offers the resume command (#852). Read when
+    /// saving: the file records the choice. `workspace.saveAsWithAgents`
+    /// keeps them for one save with this off.
+    pub saved_workspace_keeps_agent_sessions: bool,
     /// The space between cards, in pixels (`cards.gap`). Every placement,
     /// split, tidy and growth works from it; 25 is the grid.
     pub gap: f64,
@@ -669,6 +674,7 @@ pub fn default_config() -> Config {
             shape: "16:9".into(),
             inherit_directory: true,
             new_card_inherits_directory: false,
+            saved_workspace_keeps_agent_sessions: false,
             gap: crate::cards::GUTTER,
         },
         canvas: Canvas {
@@ -1014,6 +1020,10 @@ pub fn merge_config(raw: &Value) -> Config {
             new_card_inherits_directory: bool_(
                 c.get("newCardInheritsDirectory"),
                 d.cards.new_card_inherits_directory,
+            ),
+            saved_workspace_keeps_agent_sessions: bool_(
+                c.get("savedWorkspaceKeepsAgentSessions"),
+                d.cards.saved_workspace_keeps_agent_sessions,
             ),
             // 0 packs cards edge to edge; above 200 a gap is a gulf and the
             // placement maths has no use for it.
