@@ -17,6 +17,10 @@ impl Model {
         // A closed card still running (lifecycle.rs, parked): its agent's
         // state is what decides when it ends, and what Alt+T offers.
         if let Some(p) = self.parked.iter_mut().find(|p| p.card.id == report.card_id) {
+            if intrudes(p.card.live_session.as_deref(), report) {
+                return;
+            }
+            p.card.live_session = live_after(p.card.live_session.take(), report);
             p.card.agent = apply_hook_event(p.card.agent, &report.event);
             p.active_at = now;
             if let Some(s) = &report.session {
@@ -28,6 +32,16 @@ impl Model {
         let Some(card) = self.card_mut(&report.card_id) else {
             return;
         };
+        if intrudes(card.live_session.as_deref(), report) {
+            let line = format!(
+                "{}  {} from a headless session beside the card's agent: ignored",
+                &card.id[..8.min(card.id.len())],
+                report.event
+            );
+            self.effects.push(super::Effect::AgentLog(line));
+            return;
+        }
+        card.live_session = live_after(card.live_session.take(), report);
         if let Some(t) = &report.transcript {
             card.transcript_path = Some(t.clone());
         }
@@ -175,6 +189,11 @@ impl Model {
                 }
                 continue;
             }
+            // The command is over, so whatever agent ran in it is too, even
+            // one killed before its SessionEnd (#854).
+            if let crate::program_state::Signal::CommandEnd(_) = sig {
+                card.live_session = None;
+            }
             let before = card.agent;
             let ran = track.since.map(|t| (now - t) / 1000.);
             card.agent = track.apply(card.agent, agent_card, sig, now);
@@ -251,5 +270,76 @@ impl Model {
         for line in lines {
             self.effects.push(super::Effect::AgentLog(line));
         }
+    }
+}
+
+/// Whether `report` comes from a headless Claude run (`claude -p`, the Agent
+/// SDK) beside the session live in the card (#854). A hook script that runs
+/// one in the background hands it the card's id; its events would end the
+/// agent's colour and put a session with no transcript where `claude
+/// --resume` looks. A headless run with the card to itself still counts:
+/// `claude -p` typed at the prompt colours its card as before.
+fn intrudes(live: Option<&str>, report: &HookReport) -> bool {
+    report.headless
+        && matches!(
+            (live, report.session.as_deref()),
+            (Some(live), Some(s)) if live != s
+        )
+}
+
+/// The card's live session after an accepted `report`: its own session,
+/// until that session's `SessionEnd`. A report with no session (Pi) leaves
+/// it as it was.
+fn live_after(live: Option<String>, report: &HookReport) -> Option<String> {
+    match report.session.as_deref() {
+        Some(_) if report.event == "SessionEnd" => None,
+        Some(s) => Some(s.to_string()),
+        None => live,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(event: &str, session: &str, headless: bool) -> HookReport {
+        HookReport {
+            card_id: "c".into(),
+            event: event.into(),
+            tool: None,
+            transcript: None,
+            session: Some(session.into()),
+            agent: None,
+            headless,
+        }
+    }
+
+    #[test]
+    fn only_a_headless_run_beside_a_live_session_intrudes() {
+        assert!(intrudes(Some("a"), &report("SessionStart", "b", true)));
+        assert!(
+            !intrudes(Some("a"), &report("Stop", "a", true)),
+            "its own session"
+        );
+        assert!(
+            !intrudes(None, &report("Stop", "b", true)),
+            "the card to itself"
+        );
+        assert!(
+            !intrudes(Some("a"), &report("SessionStart", "b", false)),
+            "interactive"
+        );
+    }
+
+    #[test]
+    fn the_live_session_lasts_until_its_session_end() {
+        let live = live_after(None, &report("SessionStart", "a", false));
+        assert_eq!(live.as_deref(), Some("a"));
+        assert_eq!(live_after(live, &report("SessionEnd", "a", false)), None);
+        let pi = HookReport {
+            session: None,
+            ..report("Stop", "", false)
+        };
+        assert_eq!(live_after(Some("a".into()), &pi).as_deref(), Some("a"));
     }
 }

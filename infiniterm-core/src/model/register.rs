@@ -3898,6 +3898,7 @@ mod tests {
             transcript: Some("/s/x.jsonl".into()),
             session: Some("sess-1".into()),
             agent: None,
+            headless: false,
         };
         h.m.apply_hook(&report("PreToolUse"));
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::Working);
@@ -3918,6 +3919,42 @@ mod tests {
         h.m.tick(h.m.now_ms + 2_000.);
         h.m.sweep_stale();
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::None);
+    }
+
+    // A hook script's background `claude -p` hands its events the card's id
+    // (#854): they leave the card's agent, its colour and the session
+    // `claude --resume` takes alone. Once the agent's session has ended, a
+    // `claude -p` colours the card as any agent does.
+    #[test]
+    fn a_headless_claude_beside_the_cards_agent_is_ignored() {
+        use crate::agent_state::AgentState;
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let report = |event: &str, session: &str, headless: bool| crate::hooks::HookReport {
+            card_id: id.clone(),
+            event: event.into(),
+            tool: None,
+            transcript: Some(format!("/s/{session}.jsonl")),
+            session: Some(session.into()),
+            agent: None,
+            headless,
+        };
+        h.m.apply_hook(&report("SessionStart", "agent", false));
+        h.m.apply_hook(&report("UserPromptSubmit", "agent", false));
+        for event in ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"] {
+            h.m.apply_hook(&report(event, "titler", true));
+        }
+        assert_eq!(h.focused().agent, AgentState::Working);
+        assert_eq!(h.focused().agent_session.as_deref(), Some("agent"));
+        assert_eq!(
+            h.focused().transcript_path.as_deref(),
+            Some("/s/agent.jsonl")
+        );
+        h.m.apply_hook(&report("Stop", "agent", false));
+        h.m.apply_hook(&report("SessionEnd", "agent", false));
+        h.m.apply_hook(&report("UserPromptSubmit", "script", true));
+        assert_eq!(h.focused().agent, AgentState::Working);
+        assert_eq!(h.focused().agent_session.as_deref(), Some("script"));
     }
 
     // Four cards dragged all over the canvas come back as a 2x2 in the
