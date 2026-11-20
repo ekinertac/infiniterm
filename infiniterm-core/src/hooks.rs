@@ -35,6 +35,18 @@ pub struct HookReport {
     /// The agent that sent it (`codex`, `opencode`, `pi`), from the hook
     /// binary's second argument; absent for Claude Code.
     pub agent: Option<String>,
+    /// Sent by a Claude Code that runs without a person at it: `claude -p`
+    /// or an Agent SDK program (`CLAUDE_CODE_ENTRYPOINT` is `sdk-cli`,
+    /// `sdk-ts`, `sdk-py`; the interactive one is `cli`). A hook script that
+    /// runs `claude -p` in the background inherits the card's id, and its
+    /// events must not take the card from its agent (#854,
+    /// `Model::apply_hook`).
+    pub headless: bool,
+}
+
+/// Whether `CLAUDE_CODE_ENTRYPOINT` names a run with nobody at it (#854).
+pub fn is_headless_entrypoint(entrypoint: &str) -> bool {
+    entrypoint.starts_with("sdk")
 }
 
 /// A report with no `card_id` is dropped: without it there is no card to
@@ -62,6 +74,10 @@ pub fn parse_hook_line(line: &str) -> Option<HookReport> {
             .and_then(|a| a.as_str())
             .filter(|a| !a.is_empty())
             .map(str::to_string),
+        headless: v
+            .get("entrypoint")
+            .and_then(|e| e.as_str())
+            .is_some_and(is_headless_entrypoint),
     })
 }
 
@@ -187,5 +203,27 @@ mod tests {
     fn ignores_a_payload_that_is_not_an_object() {
         let r = parse_hook_line(r#"{"card_id":"a","event":"Stop","payload":7}"#).unwrap();
         assert!(r.tool.is_none());
+    }
+
+    // `claude -p` and the Agent SDK are headless; the interactive CLI and a
+    // hook too old to send the field are not (#854).
+    #[test]
+    fn a_report_from_claude_p_is_headless() {
+        let line = |entry: &str| {
+            parse_hook_line(&format!(
+                r#"{{"card_id":"a","event":"Stop","entrypoint":"{entry}","payload":{{}}}}"#
+            ))
+            .unwrap()
+            .headless
+        };
+        assert!(line("sdk-cli"));
+        assert!(line("sdk-ts"));
+        assert!(line("sdk-py"));
+        assert!(!line("cli"));
+        assert!(
+            !parse_hook_line(r#"{"card_id":"a","event":"Stop","payload":{}}"#)
+                .unwrap()
+                .headless
+        );
     }
 }

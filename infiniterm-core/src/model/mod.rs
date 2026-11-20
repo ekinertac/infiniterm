@@ -121,6 +121,11 @@ pub struct Card {
     /// ui's spawn prints the resume command over the new shell and puts it
     /// in the card's history. Runtime-only, consumed by that one spawn.
     pub offer_resume: bool,
+    /// The agent session running in this card now: set by its hook events,
+    /// cleared by its `SessionEnd` and by the shell's end of the command.
+    /// While it is set, a headless run's events from another session (a
+    /// hook script's background `claude -p`) are dropped (#854). Runtime-only.
+    pub live_session: Option<String>,
     /// `card.protect` (Cmd+Shift+L): the card cannot be closed, by Cmd+W,
     /// by its workspace closing, or by its shell exiting (a fresh shell
     /// takes the pane instead). SAVED (`protected`); the label wears a lock
@@ -1645,6 +1650,7 @@ impl Model {
             agent_session: None,
             agent_kind: None,
             offer_resume: false,
+            live_session: None,
             number: self.take_number(),
             session: None,
             kitty_keys: false,

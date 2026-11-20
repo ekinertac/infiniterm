@@ -36,18 +36,42 @@ fn try_report() -> Option<()> {
 
     let stream = connect(&endpoint())?;
 
-    let agent = match agent {
-        Some(a) => format!(",\"agent\":{}", json_string(&a)),
-        None => String::new(),
-    };
-    let line = format!(
-        "{{\"card_id\":{},\"event\":{}{},\"payload\":{}}}\n",
-        json_string(&card_id),
-        json_string(&event),
-        agent,
-        payload
+    // What started this Claude Code (#854): `cli` for the interactive one,
+    // `sdk-cli` for `claude -p`. Claude sets it for its own hooks, over the
+    // value a nested run inherits, so the app can tell a background
+    // `claude -p` inside a card from the card's agent.
+    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+    let line = report_line(
+        &card_id,
+        &event,
+        agent.as_deref(),
+        entrypoint.as_deref(),
+        payload,
     );
     send(stream, line.as_bytes()).then_some(())
+}
+
+/// The one line the app reads (`hooks::parse_hook_line`). `agent` and
+/// `entrypoint` are left out when absent, as an older hook sent them.
+fn report_line(
+    card_id: &str,
+    event: &str,
+    agent: Option<&str>,
+    entrypoint: Option<&str>,
+    payload: &str,
+) -> String {
+    let optional = |key: &str, value: Option<&str>| match value.filter(|v| !v.is_empty()) {
+        Some(v) => format!(",\"{key}\":{}", json_string(v)),
+        None => String::new(),
+    };
+    format!(
+        "{{\"card_id\":{},\"event\":{}{}{},\"payload\":{}}}\n",
+        json_string(card_id),
+        json_string(event),
+        optional("agent", agent),
+        optional("entrypoint", entrypoint),
+        payload
+    )
 }
 
 /// How long the hook gives the app, for each of opening its endpoint and
@@ -271,5 +295,19 @@ mod tests {
     #[test]
     fn a_json_string_escapes_what_would_break_the_line() {
         assert_eq!(json_string("a\"b\\c\nd"), "\"a\\\"b\\\\c\\nd\"");
+    }
+
+    // The entrypoint rides beside the agent (#854); absent or empty, the
+    // line is the one an older hook sent.
+    #[test]
+    fn the_line_carries_the_entrypoint_when_there_is_one() {
+        assert_eq!(
+            report_line("c1", "Stop", None, Some("sdk-cli"), "{}"),
+            "{\"card_id\":\"c1\",\"event\":\"Stop\",\"entrypoint\":\"sdk-cli\",\"payload\":{}}\n"
+        );
+        assert_eq!(
+            report_line("c1", "Stop", Some("codex"), Some(""), "{}"),
+            "{\"card_id\":\"c1\",\"event\":\"Stop\",\"agent\":\"codex\",\"payload\":{}}\n"
+        );
     }
 }
