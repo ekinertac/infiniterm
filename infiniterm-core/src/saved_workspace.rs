@@ -10,6 +10,12 @@
 //! A snapshot can outlive all of them, so an opened card is a fresh shell in
 //! the saved directory, numbered like any new card.
 //!
+//! The agent session is kept when asked for (#852): by
+//! `workspace.saveAsWithAgents`, or on every save with
+//! `cards.savedWorkspaceKeepsAgentSessions`. The opened card is still a fresh
+//! shell; it offers the agent's resume command (`Card::offer_resume`), as a
+//! card whose session died with the machine does, and runs nothing itself.
+//!
 //! `Model::workspace_snapshot_text` and `Model::open_saved_workspace`
 //! (`model/persist.rs`) are the two halves; the ui (`runtime.rs`) moves
 //! the bytes with `write`, `read`, `list` and `remove` below, on the effects
@@ -45,26 +51,39 @@ pub fn file_stem(name: &str) -> Option<String> {
 
 /// The snapshot's JSON value: `workspace` named `name`, the `cards` on it
 /// and the groups those cards are in. `cards` and `groups` may be the whole
-/// canvas; what is on another workspace is left out here.
+/// canvas; what is on another workspace is left out here. `keep_agents`
+/// keeps each card's agent session, kind and title (#852).
 pub fn snapshot_value(
     name: &str,
     workspace: &SavedWorkspace,
     cards: &[SavedCard],
     groups: &[SavedGroup],
+    keep_agents: bool,
 ) -> Value {
     let cards: Vec<SavedCard> = cards
         .iter()
         .filter(|c| c.workspace_id == workspace.id)
         .cloned()
-        .map(|c| SavedCard {
-            session: None,
-            kitty_keys: false,
-            agent_session: None,
-            agent_kind: None,
-            agent_title: None,
-            number: 0,
-            cover_of: None,
-            ..c
+        .map(|c| {
+            let (agent_session, agent_kind, agent_title) = if keep_agents {
+                (
+                    c.agent_session.clone(),
+                    c.agent_kind.clone(),
+                    c.agent_title.clone(),
+                )
+            } else {
+                (None, None, None)
+            };
+            SavedCard {
+                session: None,
+                kitty_keys: false,
+                agent_session,
+                agent_kind,
+                agent_title,
+                number: 0,
+                cover_of: None,
+                ..c
+            }
         })
         .collect();
     let groups: Vec<SavedGroup> = groups
@@ -226,7 +245,7 @@ mod tests {
                 name: "theirs".into(),
             },
         ];
-        let value = snapshot_value("site", &workspace("w1"), &cards, &groups);
+        let value = snapshot_value("site", &workspace("w1"), &cards, &groups, false);
         let saved = parse_layout_allowing_empty(&value.to_string()).unwrap();
         let ids: Vec<&str> = saved.cards.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["a", "c"]);
@@ -239,7 +258,13 @@ mod tests {
 
     #[test]
     fn a_snapshot_leaves_out_what_belongs_to_the_running_shells() {
-        let value = snapshot_value("site", &workspace("w1"), &[card("a", "w1", None)], &[]);
+        let value = snapshot_value(
+            "site",
+            &workspace("w1"),
+            &[card("a", "w1", None)],
+            &[],
+            false,
+        );
         let text = value.to_string();
         for key in [
             "session",
@@ -252,6 +277,27 @@ mod tests {
             assert!(!text.contains(&format!("\"{key}\"")), "{key}");
         }
         assert!(text.contains("\"cwd\":\"/tmp\""));
+    }
+
+    // Asked for (#852): the agent's session, kind and title stay, and the
+    // daemon session and card number still go.
+    #[test]
+    fn a_snapshot_that_keeps_agents_keeps_only_the_agent() {
+        let value = snapshot_value(
+            "site",
+            &workspace("w1"),
+            &[card("a", "w1", None)],
+            &[],
+            true,
+        );
+        let saved = parse_layout_allowing_empty(&value.to_string()).unwrap();
+        let c = &saved.cards[0];
+        assert_eq!(c.agent_session.as_deref(), Some("a1"));
+        assert_eq!(c.agent_kind.as_deref(), Some("claude"));
+        assert_eq!(c.agent_title.as_deref(), Some("a task"));
+        assert_eq!(c.session, None);
+        assert!(!c.kitty_keys);
+        assert_eq!(c.number, 0);
     }
 
     #[test]

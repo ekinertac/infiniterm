@@ -708,8 +708,16 @@ impl Model {
     /// Workspace `id` as the text `workspace.saveAs` writes under `name`
     /// (#715, `saved_workspace.rs`), or `None` when there is no such
     /// workspace. An in-place editor is left out, as the save file leaves it
-    /// out, and the focus it holds is saved as the terminal under it.
-    pub fn workspace_snapshot_text(&mut self, id: &str, name: &str) -> Option<String> {
+    /// out, and the focus it holds is saved as the terminal under it. The
+    /// agent sessions stay when `agents` is set or the setting
+    /// `cards.savedWorkspaceKeepsAgentSessions` is on (#852).
+    pub fn workspace_snapshot_text(
+        &mut self,
+        id: &str,
+        name: &str,
+        agents: bool,
+    ) -> Option<String> {
+        let keep_agents = agents || self.config.cards.saved_workspace_keeps_agent_sessions;
         self.sync_workspace_viewport();
         let mut workspace = self.workspaces.iter().find(|w| w.id == id)?.clone();
         // A workspace records its focus when it is left; the one on screen
@@ -725,6 +733,7 @@ impl Model {
             &workspace,
             &self.saved_cards(false),
             &self.saved_groups(),
+            keep_agents,
         )))
     }
 
@@ -813,6 +822,13 @@ impl Model {
                 card.protected = c.protected;
                 card.tabs = c.tabs;
                 card.active_tab = c.active_tab;
+                // Only in a snapshot saved with its agents (#852). The new
+                // shell offers the resume command; the agent does not start
+                // by itself, so opening a workspace never starts several.
+                card.offer_resume = c.agent_session.is_some();
+                card.agent_session = c.agent_session;
+                card.agent_kind = c.agent_kind;
+                card.osc_title = c.agent_title;
             }
         }
         self.prune_empty_groups();

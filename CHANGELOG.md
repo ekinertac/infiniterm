@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-20
+
+- A saved workspace can keep the agent sessions running in its cards, so Claude Code (or Codex, OpenCode, Cursor, Antigravity) picks up where it was after you open the workspace again. Save with "Workspace: save as, with agent sessions…", or turn on `cards.savedWorkspaceKeepsAgentSessions` to keep them on every save. A card opened from such a workspace starts a new shell that shows the resume command, and pressing Up then Enter runs it. Nothing starts by itself.
+
 ### 2026-11-19
 
 - The editor can check spelling on the Mac: turn on `editor.spellcheck` and misspelled words in plain text and Markdown files, untitled editors and the editor `EDITOR=ift` opens (Claude Code's Ctrl+G, `git commit`) get a wavy red underline. Code, Markdown code blocks and inline code, URLs, paths and identifiers are not checked. Right-click a misspelled word for suggestions, Learn Spelling and Ignore Spelling; the palette has the same as commands, plus "go to the next misspelled word". It uses the system's dictionaries and checks a text in its main language, so a Mac set up with several languages still catches typos.

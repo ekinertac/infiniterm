@@ -616,7 +616,7 @@ impl Model {
             // A name already saved asks first: Enter on the field saves under
             // the workspace's own name, which is easy to do over a snapshot
             // you meant to keep.
-            Pending::SaveWorkspaceAs(id) => {
+            Pending::SaveWorkspaceAs { id, agents } => {
                 let Some(name) = text else { return };
                 let taken = crate::saved_workspace::file_stem(&name).filter(|stem| {
                     crate::saved_workspace::path(&crate::paths::saved_workspaces_dir(), stem)
@@ -627,15 +627,19 @@ impl Model {
                         self.prompt.confirm(
                             &format!("\"{stem}\" is already saved. Replace it?"),
                             "Replace",
-                            Pending::ReplaceSavedWorkspace { id, name: stem },
+                            Pending::ReplaceSavedWorkspace {
+                                id,
+                                name: stem,
+                                agents,
+                            },
                         );
                     }
-                    None => self.save_workspace_as(&id, &name),
+                    None => self.save_workspace_as(&id, &name, agents),
                 }
             }
-            Pending::ReplaceSavedWorkspace { id, name } => {
+            Pending::ReplaceSavedWorkspace { id, name, agents } => {
                 if text.is_some() {
-                    self.save_workspace_as(&id, &name);
+                    self.save_workspace_as(&id, &name, agents);
                 }
             }
             Pending::DeleteSavedWorkspace(name) => {

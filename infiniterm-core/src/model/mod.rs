@@ -117,6 +117,10 @@ pub struct Card {
     /// The agent that session belongs to, by its adapter's name; `None` is
     /// Claude Code. SAVED (`agentKind`) beside `agent_session`.
     pub agent_kind: Option<String>,
+    /// Opened from a saved workspace that kept `agent_session` (#852): the
+    /// ui's spawn prints the resume command over the new shell and puts it
+    /// in the card's history. Runtime-only, consumed by that one spawn.
+    pub offer_resume: bool,
     /// `card.protect` (Cmd+Shift+L): the card cannot be closed, by Cmd+W,
     /// by its workspace closing, or by its shell exiting (a fresh shell
     /// takes the pane instead). SAVED (`protected`); the label wears a lock
@@ -729,13 +733,19 @@ pub enum Pending {
     NameGroup(Vec<String>),
     RenameGroup(String),
     RenameWorkspace(String),
-    /// `workspace.saveAs` (#715): the name to save this workspace under.
-    SaveWorkspaceAs(String),
+    /// `workspace.saveAs` (#715): the name to save workspace `id` under.
+    /// `agents`: `workspace.saveAsWithAgents` (#852), keep the agent
+    /// sessions whatever the setting says.
+    SaveWorkspaceAs {
+        id: String,
+        agents: bool,
+    },
     /// The name typed for `SaveWorkspaceAs` is already saved: yes writes
     /// workspace `id` over it.
     ReplaceSavedWorkspace {
         id: String,
         name: String,
+        agents: bool,
     },
     /// `workspace.deleteSaved` (#796): yes deletes the saved workspace of
     /// this name.
@@ -1634,6 +1644,7 @@ impl Model {
             transcript_path: None,
             agent_session: None,
             agent_kind: None,
+            offer_resume: false,
             number: self.take_number(),
             session: None,
             kitty_keys: false,

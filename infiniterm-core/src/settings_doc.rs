@@ -232,6 +232,16 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "with nothing selected, it still starts at startingDir.",
         ],
     ),
+    (
+        "cards.savedWorkspaceKeepsAgentSessions",
+        &[
+            "Whether Workspace: save as… keeps each card's agent session",
+            "(Claude Code, Codex and the rest), so a card opened from the",
+            "saved workspace offers the command that resumes it: press Up,",
+            "then Enter. Off by default. Workspace: save as, with agent",
+            "sessions… keeps them for one save with this off.",
+        ],
+    ),
     ("canvas", &["The canvas itself: zooming and panning."]),
     (
         "canvas.zoomSensitivity",
