@@ -347,15 +347,19 @@ mod tests {
             assert_eq!(pid, std::process::id());
         }
         drop(listener);
-        // The file is left, nobody holds it. A test thread that forks while
-        // the listener is open leaves its child a copy of the descriptor until
-        // that child's exec, so the socket can stay live for a moment (the
-        // same fork trap as #563): wait for it to go.
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while window_open(&sock).is_some() {
-            assert!(std::time::Instant::now() < until, "the socket stayed live");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        // A socket file nobody listens on. Not the dropped listener's file:
+        // on macOS std sets FD_CLOEXEC in a step after socket(), and
+        // `Command` spawns through posix_spawn, which keeps any inherited
+        // descriptor that is not close-on-exec across the exec. A child
+        // another test spawned in that window held the listener for its
+        // whole life, so the socket stayed live past any wait (#864, failed
+        // CI on #860, #862 and #863). A datagram socket at the path is a
+        // socket file no stream listener holds, whatever was inherited, and
+        // the connect fails as it does for a stale socket.
+        let _ = std::fs::remove_file(&sock);
+        let dead = std::os::unix::net::UnixDatagram::bind(&sock).unwrap();
+        assert_eq!(window_open(&sock), None, "a socket nobody listens on");
+        drop(dead);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
