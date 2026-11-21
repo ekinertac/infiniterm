@@ -972,6 +972,8 @@ impl AppView {
                     if let Some(name) = &change.name {
                         self.model.ui_theme_file_changed(name, &change.contents);
                         self.after_look_change();
+                        // The settings window's UI Theme page reads it again.
+                        self.settings_gen += 1;
                     }
                 }
                 _ => {

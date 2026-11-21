@@ -414,9 +414,9 @@ pub struct AppView {
     /// Set by `Effect::OpenSettingsWindow`, acted on by the poll task (a
     /// window must not open inside an app update).
     pub settings_request: bool,
-    /// Bumped each time settings.json is applied from the file, so the poll
-    /// task can tell the settings window to read it again; `_drawn` is the
-    /// last one the window was told about.
+    /// Bumped each time settings.json or a ui theme file is applied from
+    /// disk, so the poll task can tell the settings window to read them
+    /// again; `_drawn` is the last one the window was told about.
     pub settings_gen: u64,
     pub settings_gen_drawn: u64,
     /// `ift read` requests the poll timer answers once the output is parsed.
