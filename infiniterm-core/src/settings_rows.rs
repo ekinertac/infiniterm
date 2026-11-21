@@ -148,6 +148,10 @@ pub fn apply(settings_text: &str, key: &str, write: &Write) -> Result<Option<Str
     Ok(Some(next))
 }
 
+/// Past this a float no longer holds every whole number exactly (2^53 is
+/// about 9e15), so a whole number this big or bigger stays a float.
+const WHOLE_LIMIT: f64 = 1e15;
+
 /// `#rgb`, `#rrggbb` or `#rrggbbaa`.
 fn is_color(s: &str) -> bool {
     crate::ui_theme::is_gradient_stop(s)
@@ -158,11 +162,19 @@ fn is_color(s: &str) -> bool {
 pub fn parse_field(kind: Kind, text: &str) -> Result<Value, String> {
     let t = text.trim();
     match kind {
+        // A whole number is written whole (`16`, not `16.0`), as a person
+        // would type it into the file.
         Kind::Number => t
             .parse::<f64>()
             .ok()
             .filter(|n| n.is_finite())
-            .map(Value::from)
+            .map(|n| {
+                if n.fract() == 0. && n.abs() < WHOLE_LIMIT {
+                    Value::from(n as i64)
+                } else {
+                    Value::from(n)
+                }
+            })
             .ok_or_else(|| "a number".to_string()),
         Kind::OptionalNumber if t.is_empty() => Ok(Value::Null),
         Kind::OptionalNumber => parse_field(Kind::Number, t),
@@ -176,6 +188,77 @@ pub fn parse_field(kind: Kind, text: &str) -> Result<Value, String> {
             Err("not edited as text".to_string())
         }
     }
+}
+
+/// How a value reads in a row and in a field opened on it: text as it is,
+/// whole numbers without a decimal point (`14`, not `14.0`), `null` as
+/// empty (an unset optional number), lists and objects as compact JSON.
+pub fn display(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        Value::Number(n) => match n.as_f64() {
+            Some(f) if f.fract() == 0. && f.abs() < WHOLE_LIMIT => format!("{}", f as i64),
+            _ => n.to_string(),
+        },
+        other => other.to_string(),
+    }
+}
+
+/// Words that keep their own spelling in a title: acronyms, and the ntfy
+/// service's lower-case name.
+const TITLE_WORDS: &[(&str, &str)] = &[
+    ("ui", "UI"),
+    ("lsp", "LSP"),
+    ("fps", "FPS"),
+    ("pwd", "PWD"),
+    ("ntfy", "ntfy"),
+    ("px", "px"),
+];
+
+/// A key as a title for people: the dotted parts and the camelCase words
+/// split, each word capitalised (`terminal.fontFamily` reads "Terminal Font
+/// Family"). The row shows the key itself beside it, so the title only has
+/// to read well, not to be unique.
+pub fn title(key: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    for part in key.split('.') {
+        let mut word = String::new();
+        for c in part.chars() {
+            if c.is_uppercase() && !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            word.push(c);
+        }
+        if !word.is_empty() {
+            words.push(word);
+        }
+    }
+    words
+        .iter()
+        .map(|w| {
+            let lower = w.to_lowercase();
+            match TITLE_WORDS.iter().find(|(k, _)| *k == lower) {
+                Some((_, spelled)) => spelled.to_string(),
+                None => {
+                    let mut c = lower.chars();
+                    c.next()
+                        .map(|f| f.to_uppercase().chain(c).collect())
+                        .unwrap_or_default()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The first line of a key's doc text, the row's subtitle.
+pub fn summary(key: &str) -> &'static str {
+    SETTINGS_DOC
+        .iter()
+        .find(|(k, _)| *k == key)
+        .and_then(|(_, lines)| lines.first().copied())
+        .unwrap_or("")
 }
 
 /// True when `row` answers the search `query`: every word of it appears in
@@ -308,11 +391,16 @@ mod tests {
 
     #[test]
     fn a_field_reads_numbers_colours_and_text_by_kind() {
-        assert_eq!(parse_field(Kind::Number, " 15 "), Ok(json!(15.0)));
+        assert_eq!(
+            parse_field(Kind::Number, " 15 "),
+            Ok(json!(15)),
+            "whole, as typed"
+        );
+        assert_eq!(parse_field(Kind::Number, "1.25"), Ok(json!(1.25)));
         assert!(parse_field(Kind::Number, "big").is_err());
         assert!(parse_field(Kind::Number, "inf").is_err());
         assert_eq!(parse_field(Kind::OptionalNumber, ""), Ok(Value::Null));
-        assert_eq!(parse_field(Kind::OptionalNumber, "13"), Ok(json!(13.0)));
+        assert_eq!(parse_field(Kind::OptionalNumber, "13"), Ok(json!(13)));
         assert_eq!(
             parse_field(Kind::Color, "#ff000080"),
             Ok(json!("#ff000080"))
@@ -324,6 +412,36 @@ mod tests {
             Ok(json!(" /bin/zsh -l"))
         );
         assert!(parse_field(Kind::Bool, "true").is_err());
+    }
+
+    #[test]
+    fn a_key_reads_as_a_title() {
+        assert_eq!(title("terminal.fontFamily"), "Terminal Font Family");
+        assert_eq!(title("theme"), "Theme");
+        assert_eq!(title("ui.hideRemoteBranches"), "UI Hide Remote Branches");
+        assert_eq!(title("editor.lsp.enabled"), "Editor LSP Enabled");
+        assert_eq!(title("notify.ntfy.server"), "Notify ntfy Server");
+        assert_eq!(title("ui.minTextPx"), "UI Min Text px");
+        assert_eq!(title("ui.statusBarPwd"), "UI Status Bar PWD");
+        // Every key gets a title with no empty word in it.
+        for (key, _, _) in SETTINGS_SCHEMA {
+            let t = title(key);
+            assert!(!t.is_empty() && !t.contains("  "), "{key}: {t:?}");
+        }
+    }
+
+    #[test]
+    fn values_read_plainly() {
+        assert_eq!(display(&json!(14.0)), "14");
+        assert_eq!(display(&json!(1.2)), "1.2");
+        assert_eq!(display(&json!("block")), "block");
+        assert_eq!(display(&Value::Null), "");
+        assert_eq!(display(&json!(["A=1"])), "[\"A=1\"]");
+        assert_eq!(
+            summary("terminal.cursorBlink"),
+            "Whether the cursor blinks."
+        );
+        assert_eq!(summary("nope"), "");
     }
 
     #[test]

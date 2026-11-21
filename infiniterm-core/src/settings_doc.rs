@@ -633,6 +633,16 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.settings",
+        &[
+            "Cmd+, opens a settings window instead of this file: every setting with its",
+            "value, a search field, and a reset button for the ones you changed. Edits",
+            "land in settings.json at once, comments kept. Off, Cmd+, opens settings.json",
+            "beside this file. \"App: open settings.json\" in the palette opens the file",
+            "either way.",
+        ],
+    ),
+    (
         "ui.switcherStateColors",
         &[
             "Ctrl+Tab rows take the colour of their agent's state (working, waiting, failed,",
