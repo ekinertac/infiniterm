@@ -8,7 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-20
 
-- A saved workspace can keep the agent sessions running in its cards, so Claude Code (or Codex, OpenCode, Cursor, Antigravity) picks up where it was after you open the workspace again. Save with "Workspace: save as, with agent sessions…", or turn on `cards.savedWorkspaceKeepsAgentSessions` to keep them on every save. A card opened from such a workspace starts a new shell that shows the resume command, and pressing Up then Enter runs it. Nothing starts by itself.
+- A saved workspace can keep the agent sessions running in its cards, so Claude Code (or Codex, OpenCode, Cursor, Antigravity) picks up where it was after you open the workspace again. Turn on `cards.savedWorkspaceKeepsAgentSessions` and "Workspace: save as…" keeps them. A card opened from such a workspace starts a new shell that shows the resume command, and pressing Up then Enter runs it. Nothing starts by itself.
 - Fixed: a `claude -p` that a hook or script runs in the background while Claude Code is open in a card (to title the session, for example) no longer changes that card. Before, it reset the card's colour mid-turn and replaced the session the card resumes with one that cannot be resumed ("No conversation found"). A `claude -p` you run yourself at the prompt still colours its card.
 
 ### 2026-11-19

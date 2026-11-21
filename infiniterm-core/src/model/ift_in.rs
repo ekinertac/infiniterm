@@ -135,7 +135,7 @@ impl Model {
                     ));
                 }
                 // Agent sessions as the setting says (#852).
-                let Some(text) = self.workspace_snapshot_text(&id, &stem, false) else {
+                let Some(text) = self.workspace_snapshot_text(&id, &stem) else {
                     return err(format!("no workspace {workspace}"));
                 };
                 if let Err(e) = crate::saved_workspace::write(dir, &stem, &text) {

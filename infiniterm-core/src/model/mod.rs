@@ -738,19 +738,13 @@ pub enum Pending {
     NameGroup(Vec<String>),
     RenameGroup(String),
     RenameWorkspace(String),
-    /// `workspace.saveAs` (#715): the name to save workspace `id` under.
-    /// `agents`: `workspace.saveAsWithAgents` (#852), keep the agent
-    /// sessions whatever the setting says.
-    SaveWorkspaceAs {
-        id: String,
-        agents: bool,
-    },
+    /// `workspace.saveAs` (#715): the name to save this workspace under.
+    SaveWorkspaceAs(String),
     /// The name typed for `SaveWorkspaceAs` is already saved: yes writes
     /// workspace `id` over it.
     ReplaceSavedWorkspace {
         id: String,
         name: String,
-        agents: bool,
     },
     /// `workspace.deleteSaved` (#796): yes deletes the saved workspace of
     /// this name.

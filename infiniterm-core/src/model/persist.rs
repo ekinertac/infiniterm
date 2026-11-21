@@ -709,15 +709,10 @@ impl Model {
     /// (#715, `saved_workspace.rs`), or `None` when there is no such
     /// workspace. An in-place editor is left out, as the save file leaves it
     /// out, and the focus it holds is saved as the terminal under it. The
-    /// agent sessions stay when `agents` is set or the setting
+    /// agent sessions stay when the setting
     /// `cards.savedWorkspaceKeepsAgentSessions` is on (#852).
-    pub fn workspace_snapshot_text(
-        &mut self,
-        id: &str,
-        name: &str,
-        agents: bool,
-    ) -> Option<String> {
-        let keep_agents = agents || self.config.cards.saved_workspace_keeps_agent_sessions;
+    pub fn workspace_snapshot_text(&mut self, id: &str, name: &str) -> Option<String> {
+        let keep_agents = self.config.cards.saved_workspace_keeps_agent_sessions;
         self.sync_workspace_viewport();
         let mut workspace = self.workspaces.iter().find(|w| w.id == id)?.clone();
         // A workspace records its focus when it is left; the one on screen

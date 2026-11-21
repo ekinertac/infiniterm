@@ -4528,12 +4528,12 @@ mod tests {
     /// under "site" (#715): the harness, the saved text, the ids of the
     /// three cards.
     fn saved_site() -> (Harness, String, [String; 3]) {
-        saved_site_by("workspace.saveAs", false)
+        saved_site_by(false)
     }
 
-    /// `saved_site`, saved by `command` with
-    /// `cards.savedWorkspaceKeepsAgentSessions` set to `keep_setting` (#852).
-    fn saved_site_by(command: &str, keep_setting: bool) -> (Harness, String, [String; 3]) {
+    /// `saved_site`, saved with `cards.savedWorkspaceKeepsAgentSessions` set
+    /// to `keep_setting` (#852).
+    fn saved_site_by(keep_setting: bool) -> (Harness, String, [String; 3]) {
         let mut h = Harness::new();
         h.m.config.cards.saved_workspace_keeps_agent_sessions = keep_setting;
         let here = h.m.active_workspace.clone().unwrap();
@@ -4580,7 +4580,7 @@ mod tests {
             h.m.card_mut(id).unwrap().group_id = Some(group.clone());
         }
         h.m.set_focus(Some(&editor));
-        h.run(command);
+        h.run("workspace.saveAs");
         let (pending, text) = h.m.prompt.settle(Some(" site ")).unwrap();
         h.m.answer(pending, text, |_| false);
         let text =
@@ -4646,39 +4646,31 @@ mod tests {
         assert_eq!(&h.m.cards[..3], &before[..]);
     }
 
-    // Kept on request (#852), by the command or by the setting: the opened
-    // terminal is still a fresh shell, with the agent session it can resume.
+    // Kept by the setting (#852): the plain save as keeps them, and the
+    // opened terminal is still a fresh shell, with the agent session it can
+    // resume.
     #[test]
     fn a_workspace_saved_with_its_agents_opens_offering_the_resume() {
-        for (command, setting) in [
-            ("workspace.saveAsWithAgents", false),
-            ("workspace.saveAs", true),
-        ] {
-            let (mut h, text, [term, ..]) = saved_site_by(command, setting);
-            h.m.open_saved_workspace("site", Some(&text));
-            let ws = h.m.workspaces.last().unwrap().id.clone();
-            let opened =
-                h.m.cards_on(Some(&ws))
-                    .into_iter()
-                    .find(|c| c.kind == CardKind::Terminal)
-                    .cloned()
-                    .unwrap();
-            assert_ne!(opened.id, term, "{command}");
-            assert_eq!(opened.session, None, "{command}");
-            assert_eq!(
-                opened.agent_session.as_deref(),
-                Some("agent-1"),
-                "{command}"
-            );
-            assert!(opened.offer_resume, "{command}");
-            // A card with no agent offers nothing.
-            assert!(h
-                .m
-                .cards_on(Some(&ws))
-                .iter()
-                .filter(|c| c.kind != CardKind::Terminal)
-                .all(|c| !c.offer_resume && c.agent_session.is_none()));
-        }
+        let (mut h, text, [term, ..]) = saved_site_by(true);
+        h.m.open_saved_workspace("site", Some(&text));
+        let ws = h.m.workspaces.last().unwrap().id.clone();
+        let opened =
+            h.m.cards_on(Some(&ws))
+                .into_iter()
+                .find(|c| c.kind == CardKind::Terminal)
+                .cloned()
+                .unwrap();
+        assert_ne!(opened.id, term);
+        assert_eq!(opened.session, None);
+        assert_eq!(opened.agent_session.as_deref(), Some("agent-1"));
+        assert!(opened.offer_resume);
+        // A card with no agent offers nothing.
+        assert!(h
+            .m
+            .cards_on(Some(&ws))
+            .iter()
+            .filter(|c| c.kind != CardKind::Terminal)
+            .all(|c| !c.offer_resume && c.agent_session.is_none()));
     }
 
     #[test]
@@ -4759,7 +4751,7 @@ mod tests {
     fn a_workspace_saved_under_no_name_is_not_saved() {
         let mut h = Harness::new();
         let here = h.m.active_workspace.clone().unwrap();
-        h.m.save_workspace_as(&here, " .. ", false);
+        h.m.save_workspace_as(&here, " .. ");
         assert!(!h
             .m
             .take_effects()
@@ -4797,7 +4789,6 @@ mod tests {
                 Pending::ReplaceSavedWorkspace {
                     id: h.m.active_workspace.clone().unwrap(),
                     name: "site".into(),
-                    agents: false,
                 }
             );
             h.m.answer(pending, text, |_| true);
