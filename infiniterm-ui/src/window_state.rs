@@ -26,6 +26,11 @@ fn path() -> PathBuf {
     infiniterm_core::paths::app_support_dir().join("window.json")
 }
 
+/// The settings window's frame (#745), kept apart from the main window's.
+fn settings_path() -> PathBuf {
+    infiniterm_core::paths::app_support_dir().join("settings-window.json")
+}
+
 impl WindowState {
     pub fn of(bounds: WindowBounds) -> WindowState {
         let (b, mode) = match bounds {
@@ -55,7 +60,16 @@ impl WindowState {
     /// The saved state, if there is one that makes sense: a window smaller
     /// than a card's chrome is a corrupt file, not a preference.
     pub fn load() -> Option<WindowState> {
-        let text = std::fs::read_to_string(path()).ok()?;
+        Self::load_from(&path())
+    }
+
+    /// The settings window's last frame, under the same sanity rule.
+    pub fn load_settings() -> Option<WindowState> {
+        Self::load_from(&settings_path())
+    }
+
+    fn load_from(path: &std::path::Path) -> Option<WindowState> {
+        let text = std::fs::read_to_string(path).ok()?;
         Self::parse(&text)
     }
 
@@ -65,11 +79,19 @@ impl WindowState {
     }
 
     pub fn save(&self) {
+        self.save_to(&path());
+    }
+
+    pub fn save_settings(&self) {
+        self.save_to(&settings_path());
+    }
+
+    fn save_to(&self, path: &std::path::Path) {
         if let Ok(text) = serde_json::to_string(self) {
-            if let Some(dir) = path().parent() {
+            if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let _ = std::fs::write(path(), text);
+            let _ = std::fs::write(path, text);
         }
     }
 }
