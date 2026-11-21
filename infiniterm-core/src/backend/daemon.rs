@@ -1309,12 +1309,38 @@ mod viewer_tests {
         dir
     }
 
+    /// ETXTBSY, the same number on Linux and macOS.
+    const TEXT_FILE_BUSY: i32 = 26;
+
     /// A stand-in `ssh` that ignores its arguments and runs `body`.
+    ///
+    /// Run once with `__probe` before it is handed over, until it runs: a
+    /// test thread that forks while the script is open for writing leaves
+    /// its child a writer until that child's exec, and an exec in that gap
+    /// fails with "Text file busy" (the #563 trap; it failed CI on #861 and
+    /// #865). Once one exec works, nothing holds it for writing and nothing
+    /// can again, so the backend's exec cannot hit it.
     fn stand_in(name: &str, body: &str) -> super::super::remote::RemoteHost {
         use std::os::unix::fs::PermissionsExt;
         let path = temp_sessions(name).join("ssh");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\n[ \"$1\" = __probe ] && exit 0\n{body}\n"),
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let ready =
+            (0..200).any(
+                |_| match std::process::Command::new(&path).arg("__probe").status() {
+                    Ok(_) => true,
+                    Err(e) if e.raw_os_error() == Some(TEXT_FILE_BUSY) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        false
+                    }
+                    Err(e) => panic!("could not run the stand-in: {e}"),
+                },
+            );
+        assert!(ready, "the stand-in stayed busy");
         let mut host = super::super::remote::RemoteHost::new("h");
         host.ssh = path.display().to_string();
         host
