@@ -560,6 +560,9 @@ pub struct TabStyle {
     pub idle_border: Option<Hsla>,
     pub active_border: Option<Hsla>,
     pub separator: Option<Hsla>,
+    /// Draw `separator` beside the chosen tab too (#869). Only the workspace
+    /// tab row reads it; the card tab strip keeps its own rule.
+    pub separator_around_active: bool,
     pub radius: Option<f32>,
     pub padding_x: Option<f32>,
 }
@@ -589,6 +592,7 @@ impl Chrome {
             idle_border: line(&theme.border),
             active_border: line(&theme.active_border),
             separator: line(&theme.separator),
+            separator_around_active: theme.separator_around_active.unwrap_or(false),
             radius: theme.radius.map(|r| r as f32),
             padding_x: theme.padding_x.map(|p| p as f32),
         }
@@ -920,6 +924,16 @@ mod tab_color_tests {
         assert_eq!(s.active_border, hex("#abcdef"));
         assert_eq!(s.separator, Some(chrome.card_bg));
         assert_eq!(s.radius, Some(9.));
+        assert!(!s.separator_around_active, "off unless set (#869)");
+        let around = TabTheme {
+            separator_around_active: Some(true),
+            ..theme
+        };
+        assert!(
+            chrome
+                .tab_style(&around, chrome.control_bg)
+                .separator_around_active
+        );
     }
 
     #[test]

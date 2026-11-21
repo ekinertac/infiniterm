@@ -1031,13 +1031,14 @@ impl AppView {
                         .border_color(color),
                 );
             }
-            // A line between two idle neighbours; none touches the chosen tab.
+            // A line between two idle neighbours; none touches the chosen tab
+            // unless `tab.separatorAroundActive` asks for it (#869).
             let after_active = index > 0
                 && active.as_deref() == self.model.workspaces.get(index - 1).map(|w| w.id.as_str());
             // The slot is always there (clear next to the chosen tab) so
             // choosing a tab does not change the row's width.
             if let (Some(color), true) = (tab_style.separator, index > 0) {
-                let shown = !is_active && !after_active;
+                let shown = tab_style.separator_around_active || (!is_active && !after_active);
                 tabs = tabs.child(div().w(px(1.)).h(px(14. * ui)).when(shown, |d| d.bg(color)));
             }
             tabs = tabs.child(tab);

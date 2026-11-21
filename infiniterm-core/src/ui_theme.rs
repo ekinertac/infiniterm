@@ -75,6 +75,9 @@ pub struct TabTheme {
     pub active_border: Option<BorderSpec>,
     /// The line between two neighbouring idle tabs.
     pub separator: Option<BorderSpec>,
+    /// Workspace tabs only (#869): draw `separator` beside the chosen tab
+    /// too. Off unless set; card tabs never read it.
+    pub separator_around_active: Option<bool>,
     /// Corner radius in pixels, 0 to 40.
     pub radius: Option<f64>,
     /// Padding on each side of a tab's content in pixels, 0 to 40.
@@ -206,7 +209,7 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 37] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 38] = [
     (
         "canvas.background",
         &[
@@ -281,9 +284,17 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 37] = [
         "tab.separator",
         &[
             "A thin line between two neighbouring idle workspace tabs: a colour, or \"none\".",
-            "No line touches the chosen tab.",
+            "No line touches the chosen tab unless tab.separatorAroundActive is true.",
         ],
         "\"none\"",
+    ),
+    (
+        "tab.separatorAroundActive",
+        &[
+            "Draw tab.separator on both sides of the chosen workspace tab too. Off by default:",
+            "the chosen tab's own fill or outline marks its edges. Card tabs are not affected.",
+        ],
+        "false",
     ),
     (
         "tab.radius",
@@ -722,6 +733,12 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
             "tab.icons" => {
                 theme.tab.icons = Some(v.as_bool().ok_or("\"tab.icons\" must be true or false")?)
             }
+            "tab.separatorAroundActive" => {
+                theme.tab.separator_around_active = Some(
+                    v.as_bool()
+                        .ok_or("\"tab.separatorAroundActive\" must be true or false")?,
+                )
+            }
             "tab.iconStyle" => {
                 theme.tab.icon_style = Some(
                     v.as_str()
@@ -954,6 +971,24 @@ mod tests {
         assert_eq!(t.radius, Some(9.));
         assert_eq!(t.padding_x, Some(14.));
         assert_eq!(parse(r#"{"tab.gradient": []}"#).unwrap().tab.gradient, None);
+    }
+
+    // #869: off unless set, a bool, and workspace tabs only.
+    #[test]
+    fn the_separator_around_the_chosen_tab_is_off_unless_set() {
+        assert_eq!(parse("{}").unwrap().tab.separator_around_active, None);
+        let t = parse(r#"{"tab.separatorAroundActive": true}"#).unwrap();
+        assert_eq!(t.tab.separator_around_active, Some(true));
+        assert_eq!(
+            t.card_tab.separator_around_active, None,
+            "card tabs untouched"
+        );
+        let err = parse(r#"{"tab.separatorAroundActive": "yes"}"#).unwrap_err();
+        assert!(err.contains("tab.separatorAroundActive"), "{err}");
+        assert!(
+            parse(r#"{"cardTab.separatorAroundActive": true}"#).is_err(),
+            "no card tab twin"
+        );
     }
 
     #[test]
