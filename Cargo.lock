@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-cli"
-version = "0.6.17"
+version = "0.6.18"
 dependencies = [
  "infiniterm-core",
  "libc",
@@ -3286,7 +3286,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-core"
-version = "0.6.17"
+version = "0.6.18"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -3305,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-editor"
-version = "0.6.17"
+version = "0.6.18"
 dependencies = [
  "regex",
  "ropey",
@@ -3333,11 +3333,11 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-hook"
-version = "0.6.17"
+version = "0.6.18"
 
 [[package]]
 name = "infiniterm-session"
-version = "0.6.17"
+version = "0.6.18"
 dependencies = [
  "infiniterm-core",
  "libc",
@@ -3347,7 +3347,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-term"
-version = "0.6.17"
+version = "0.6.18"
 dependencies = [
  "alacritty_terminal",
  "infiniterm-core",
@@ -3355,7 +3355,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-ui"
-version = "0.6.17"
+version = "0.6.18"
 dependencies = [
  "block",
  "block2",

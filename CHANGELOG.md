@@ -6,6 +6,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+## 0.6.18 (build 1806), 2026-11-22
+
 ### 2026-11-21
 
 - New ui theme key `tab.separatorAroundActive`: `true` draws the workspace tab separator (`tab.separator`) on both sides of the chosen tab too. Off by default, so the look does not change; card tabs are not affected.
