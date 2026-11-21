@@ -39,6 +39,26 @@ pub const TOPIC_MAX: usize = 64;
 /// held.
 pub const DONE_HOLD_SECS: f64 = 20.0;
 
+/// How long a card must stay waiting before it counts as waiting for the
+/// phone (#858). Claude's `PermissionRequest` hook turns a card waiting the
+/// moment the dialog shows; before it was wired, the only signal was
+/// `Notification`'s `permission_prompt`, about 6 s into the prompt, and that
+/// lag was a debounce nobody had named: a prompt answered at once never
+/// reached the phone. This keeps it so. A prompt answered within the hold
+/// sends nothing; one left longer pushes once, about as late as before. The
+/// card colour on the Mac is not held.
+pub const WAITING_HOLD_SECS: f64 = 6.0;
+
+/// The hold for a state before the phone hears of it, if it has one.
+/// Failed has none: a failure is news at once.
+pub fn hold_secs(state: AgentState) -> Option<f64> {
+    match state {
+        AgentState::Done => Some(DONE_HOLD_SECS),
+        AgentState::Waiting => Some(WAITING_HOLD_SECS),
+        _ => None,
+    }
+}
+
 /// A card whose state changed to one that needs you.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change {

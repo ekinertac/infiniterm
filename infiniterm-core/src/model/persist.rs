@@ -448,30 +448,34 @@ impl Model {
     pub fn push_tick(&mut self, now: f64) {
         use crate::agent_state::AgentState;
         use crate::push_notify as pn;
-        // A done that is new since the last look is held back for
-        // `DONE_HOLD_SECS` and counted as working meanwhile (#674): the turn
-        // that ended may be followed by another one. The first look holds
-        // nothing, or a done card at startup would push once the hold ran out.
-        self.done_since.retain(|id, _| {
-            self.cards
-                .iter()
-                .any(|c| c.id == *id && c.agent == AgentState::Done)
-        });
+        // A done or waiting that is new since the last look is held back for
+        // its `pn::hold_secs` and counted as working meanwhile: the turn that
+        // ended may be followed by another one (#674, 20 s), and a permission
+        // prompt may be answered at once (#858, 6 s). The first look holds
+        // nothing, or a card already done or waiting at startup would push
+        // once the hold ran out. A hold belongs to one state: waiting then
+        // done starts the done hold afresh.
+        self.held_since
+            .retain(|id, (state, _)| self.cards.iter().any(|c| c.id == *id && c.agent == *state));
         let current: std::collections::BTreeMap<String, AgentState> = self
             .cards
             .iter()
             .filter(|c| c.agent != AgentState::None)
             .map(|c| {
-                let was_done = self
+                let already = self
                     .push_prev
                     .as_ref()
-                    .is_none_or(|p| p.get(&c.id) == Some(&AgentState::Done));
-                if c.agent != AgentState::Done || was_done {
+                    .is_none_or(|p| p.get(&c.id) == Some(&c.agent));
+                let Some(hold) = pn::hold_secs(c.agent).filter(|_| !already) else {
                     return (c.id.clone(), c.agent);
-                }
-                let since = *self.done_since.entry(c.id.clone()).or_insert(now);
-                // A clock that steps back must not hold a done for ever.
-                let held = since <= now && now - since < pn::DONE_HOLD_SECS;
+                };
+                let since = self
+                    .held_since
+                    .entry(c.id.clone())
+                    .or_insert((c.agent, now))
+                    .1;
+                // A clock that steps back must not hold a state for ever.
+                let held = since <= now && now - since < hold;
                 (
                     c.id.clone(),
                     if held { AgentState::Working } else { c.agent },
@@ -1890,6 +1894,7 @@ mod agent_states_text_tests {
         let number = m.card_mut(&id).unwrap().number;
         m.card_mut(&id).unwrap().agent = AgentState::Waiting;
         m.push_tick(0.0);
+        m.push_tick(crate::push_notify::WAITING_HOLD_SECS);
         let got = pushes(&mut m);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].message, "Waiting on you");
@@ -1951,7 +1956,81 @@ mod agent_states_text_tests {
         m.push_tick(0.0);
         m.push_tick(crate::push_notify::DONE_HOLD_SECS * 2.0);
         assert!(pushes(&mut m).is_empty());
-        assert!(m.done_since.is_empty());
+        assert!(m.held_since.is_empty());
+    }
+
+    // #858: Claude's PermissionRequest turns a card waiting at once, so a
+    // waiting is held back for the phone as the 6 s Notification lag used to.
+    #[test]
+    fn push_tick_sends_nothing_for_a_prompt_answered_within_the_hold() {
+        let hold = crate::push_notify::WAITING_HOLD_SECS;
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick(1.0);
+        m.push_tick(1.0 + hold - 0.5);
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(1.0 + hold);
+        m.push_tick(100.0);
+        assert!(pushes(&mut m).is_empty());
+        assert!(
+            relays(&mut m).iter().all(|(a, _)| a.is_none()),
+            "no relay alert either"
+        );
+    }
+
+    #[test]
+    fn push_tick_sends_one_push_for_a_prompt_left_past_the_hold() {
+        let hold = crate::push_notify::WAITING_HOLD_SECS;
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick(1.0);
+        assert!(pushes(&mut m).is_empty());
+        m.push_tick(1.0 + hold);
+        assert_eq!(pushes(&mut m).len(), 1);
+        m.push_tick(60.0);
+        assert!(pushes(&mut m).is_empty(), "sent once");
+    }
+
+    #[test]
+    fn push_tick_a_held_waiting_then_failed_pushes_at_once_and_then_done_is_held() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick(1.0);
+        // Failed has no hold: it goes out at once, as before.
+        m.card_mut(&id).unwrap().agent = AgentState::Failed;
+        m.push_tick(2.0);
+        assert_eq!(pushes(&mut m).len(), 1);
+        // Waiting held, then done: the done hold starts from the done.
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(10.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick(11.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick(12.0);
+        m.push_tick(11.0 + crate::push_notify::DONE_HOLD_SECS);
+        assert!(pushes(&mut m).is_empty(), "the done hold counts from 12 s");
+        m.push_tick(12.0 + crate::push_notify::DONE_HOLD_SECS);
+        assert_eq!(pushes(&mut m).len(), 1);
+    }
+
+    #[test]
+    fn push_tick_does_not_hold_a_waiting_seen_at_the_first_look() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick(0.0);
+        m.push_tick(crate::push_notify::WAITING_HOLD_SECS * 2.0);
+        assert!(pushes(&mut m).is_empty());
+        assert!(m.held_since.is_empty());
     }
 
     fn relays(
@@ -1991,6 +2070,7 @@ mod agent_states_text_tests {
         m.push_tick(10.0);
         m.card_mut(&b).unwrap().agent = AgentState::Waiting;
         m.push_tick(20.0);
+        m.push_tick(20.0 + crate::push_notify::WAITING_HOLD_SECS);
         let got = relays(&mut m);
         assert_eq!(got.len(), 1);
         let (alert, cards) = &got[0];
@@ -2023,6 +2103,7 @@ mod agent_states_text_tests {
         // A waiting card still alerts, and the list holds it but not the done one.
         m.card_mut(&b).unwrap().agent = AgentState::Waiting;
         m.push_tick(30.0);
+        m.push_tick(30.0 + crate::push_notify::WAITING_HOLD_SECS);
         let got = relays(&mut m);
         assert_eq!(got.len(), 1);
         let cards = &got[0].1;
@@ -2044,9 +2125,11 @@ mod agent_states_text_tests {
         m.config.notify.skip_when_focused = true;
         m.push_tick(0.0);
         m.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        let hold = crate::push_notify::WAITING_HOLD_SECS;
         m.push_tick(10.0);
+        m.push_tick(10.0 + hold);
         assert!(relays(&mut m).is_empty(), "no alert while focused");
-        m.push_tick(12.0);
+        m.push_tick(12.0 + hold);
         let got = relays(&mut m);
         assert_eq!(got.len(), 1);
         assert!(got[0].0.is_none(), "a list refresh, not an alert");
@@ -2077,9 +2160,12 @@ mod agent_states_text_tests {
         m.app_active = false;
         m.push_tick(5.0);
         m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        // Listed once the waiting hold is over (#858), and kept after.
+        let listed_at = 100.0 + crate::push_notify::WAITING_HOLD_SECS;
         m.push_tick(100.0);
+        m.push_tick(listed_at);
         m.push_tick(200.0);
-        assert_eq!(m.push_since.get(&id), Some(&100.0));
+        assert_eq!(m.push_since.get(&id), Some(&listed_at));
         m.effects.clear();
         m.card_mut(&id).unwrap().agent = AgentState::Done;
         m.push_tick(300.0);
