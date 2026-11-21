@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-21
 
 - A Claude Code card turns yellow the moment Claude asks for permission, instead of about 6 seconds later. Run `ift install-claude-hooks` again to add the new hook (`PermissionRequest`); it is safe to run twice and leaves your other settings alone.
+- A permission prompt you answer within 6 seconds no longer sends a phone notification; one left longer still does, once. The card on the Mac still turns yellow at once.
 
 ### 2026-11-20
 

@@ -954,9 +954,10 @@ pub struct Model {
     /// Card id to the wall-clock second its pushable state began, for the
     /// relay's colour list (#649). Only pushable cards have an entry.
     pub push_since: std::collections::BTreeMap<String, f64>,
-    /// Card id to the wall-clock second `push_tick` first saw it done, while
-    /// the done is still held back (`push_notify::DONE_HOLD_SECS`, #674).
-    pub done_since: std::collections::BTreeMap<String, f64>,
+    /// Card id to the state `push_tick` is holding back and the wall-clock
+    /// second it first saw it, while the hold lasts (`push_notify::hold_secs`:
+    /// done #674, waiting #858).
+    pub held_since: std::collections::BTreeMap<String, (AgentState, f64)>,
     /// When a drop-only relay push is due. A card leaving a coloured state
     /// waits a moment so a quick flip back does not cost a push.
     pub relay_drop_due: Option<f64>,
@@ -1308,7 +1309,7 @@ impl Model {
             done_watch: None,
             push_prev: None,
             push_since: std::collections::BTreeMap::new(),
-            done_since: std::collections::BTreeMap::new(),
+            held_since: std::collections::BTreeMap::new(),
             relay_drop_due: None,
             host_label: "Mac".into(),
             focus_trail: Vec::new(),
