@@ -2,7 +2,7 @@
 //! `~/.codex/hooks.json`, which has the same shape and the same event names
 //! (Codex 0.145+, issue #26).
 //!
-//! This replaces eight hand-written JSON entries pointing at an absolute path,
+//! This replaces nine hand-written JSON entries pointing at an absolute path,
 //! which is the one piece of setup infiniterm still asks for by hand — and the
 //! one where a mistake is silent, because a wrong path just means the borders
 //! never light up.
@@ -19,25 +19,48 @@
 //! 3. **Say what changed.** The caller prints the events touched and the file
 //!    path, so it is obvious what to undo.
 //!
-//! The events are the eight the card state machine reads; see
-//! `src/lib/agentState.ts` for what each one means to a border.
+//! The events are the nine the card state machine reads; see
+//! `infiniterm-core/src/agent_state.rs` (`apply_hook_event`) for what each
+//! one means to a border.
 
 use serde_json::{json, Map, Value};
 
 /// The hook events infiniterm listens for.
 ///
 /// Kept in the order the state machine documents them rather than alphabetically,
-/// so this list reads against agentState.ts.
-pub const EVENTS: [&str; 8] = [
+/// so this list reads against `apply_hook_event`.
+///
+/// `PermissionRequest` (#858) runs right before Claude shows a permission
+/// dialog, so the card turns waiting at once. `Notification` stays: it is
+/// what an older Claude Code without `PermissionRequest` sends, about 6 s
+/// into a prompt, and it is harmless beside the new event.
+pub const EVENTS: [&str; 9] = [
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
+    "PermissionRequest",
     "Stop",
     "StopFailure",
     "Notification",
     "SessionStart",
     "SessionEnd",
 ];
+
+/// Seconds Claude Code gives our `PermissionRequest` hook before it cancels
+/// it. Claude's default is 600, and a `PermissionRequest` hook that fails
+/// or times out may deny the request (its docs tie a failed one to a deny
+/// under `onFailure: "block"`, and say a request no hook decides can be
+/// denied where Claude cannot prompt). The hook needs at most about 400 ms
+/// (200 ms to open the socket, 200 ms to write), so 5 s is a wide margin
+/// that still bounds a wedged app well below a stalled prompt.
+pub const PERMISSION_REQUEST_TIMEOUT_SECS: u64 = 5;
+
+/// The `timeout` our entry for `event` carries, if any. Only Claude Code's
+/// `PermissionRequest` (no agent name): Codex reads the same file shape, but
+/// its timeout rules were not checked, so its entries stay as they were.
+fn entry_timeout(event: &str, agent: Option<&str>) -> Option<u64> {
+    (agent.is_none() && event == "PermissionRequest").then_some(PERMISSION_REQUEST_TIMEOUT_SECS)
+}
 
 /// The name the hook binary is built under, which Windows spells with an
 /// extension. `ift` looks for this beside itself and on PATH.
@@ -167,6 +190,7 @@ pub fn install_events(
     let hooks = hooks.as_object_mut().expect("just made it an object");
 
     for &event in events {
+        let timeout = entry_timeout(event, agent);
         let want = match agent {
             Some(a) => format!("{} {a}", hook_command(hook_binary, event)),
             None => hook_command(hook_binary, event),
@@ -195,8 +219,20 @@ pub fn install_events(
                     continue;
                 }
                 found = true;
+                let mut touched = false;
                 if hook.get("command").and_then(Value::as_str) != Some(want.as_str()) {
                     hook["command"] = Value::String(want.clone());
+                    touched = true;
+                }
+                // A timeout is added where ours has none; one somebody set
+                // by hand is theirs and stays.
+                if let Some(secs) = timeout {
+                    if hook.get("timeout").is_none() {
+                        hook["timeout"] = json!(secs);
+                        touched = true;
+                    }
+                }
+                if touched {
                     changed.push(event.to_string());
                 }
             }
@@ -205,7 +241,11 @@ pub fn install_events(
         if !found {
             // Appended, not prepended: hooks run in order and somebody else's
             // was here first. Ours only reports, so it has no reason to go first.
-            list.push(json!({ "hooks": [{ "type": "command", "command": want }] }));
+            let mut hook = json!({ "type": "command", "command": want });
+            if let Some(secs) = timeout {
+                hook["timeout"] = json!(secs);
+            }
+            list.push(json!({ "hooks": [hook] }));
             changed.push(event.to_string());
         }
     }
@@ -308,6 +348,50 @@ mod tests {
         for event in EVENTS {
             assert_eq!(commands(&s, event), vec![format!("/bin/ih {event}")]);
         }
+    }
+
+    /// #858: Claude's permission prompt turns the card waiting at once, and
+    /// the entry carries a short timeout so a wedged app cannot hold the
+    /// prompt for Claude's default 600 s. Notification stays as the fallback.
+    #[test]
+    fn claude_gets_permission_request_with_a_short_timeout() {
+        let mut s = json!({});
+        install(&mut s, "/bin/ih");
+        assert_eq!(
+            commands(&s, "PermissionRequest"),
+            vec!["/bin/ih PermissionRequest".to_string()]
+        );
+        let hook = &s["hooks"]["PermissionRequest"][0]["hooks"][0];
+        assert_eq!(hook["timeout"], json!(PERMISSION_REQUEST_TIMEOUT_SECS));
+        assert_eq!(commands(&s, "Notification"), vec!["/bin/ih Notification".to_string()]);
+        // Only that entry: the others keep Claude's default.
+        assert!(s["hooks"]["Stop"][0]["hooks"][0].get("timeout").is_none());
+    }
+
+    /// An entry from before #858 (or one written by hand) gets the timeout
+    /// added; a timeout somebody chose is left alone.
+    #[test]
+    fn the_permission_timeout_is_added_once_and_never_overrides_one_set_by_hand() {
+        let mut s = json!({ "hooks": { "PermissionRequest": [
+            { "hooks": [{ "type": "command", "command": "/bin/ih PermissionRequest" }] }
+        ] } });
+        assert_eq!(install(&mut s, "/bin/ih").iter().filter(|e| *e == "PermissionRequest").count(), 1);
+        assert_eq!(s["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"], json!(5));
+        assert!(install(&mut s, "/bin/ih").is_empty(), "a second run changes nothing");
+
+        let mut mine = json!({ "hooks": { "PermissionRequest": [
+            { "hooks": [{ "type": "command", "command": "/bin/ih PermissionRequest", "timeout": 2 }] }
+        ] } });
+        install(&mut mine, "/bin/ih");
+        assert_eq!(mine["hooks"]["PermissionRequest"][0]["hooks"][0]["timeout"], json!(2));
+    }
+
+    /// Codex's entries keep the shape they had: no timeout was checked there.
+    #[test]
+    fn codex_permission_request_gets_no_timeout() {
+        let mut s = json!({});
+        install_events(&mut s, "/bin/ih", &CODEX_EVENTS, Some("codex"));
+        assert!(s["hooks"]["PermissionRequest"][0]["hooks"][0].get("timeout").is_none());
     }
 
     /// A real settings.json is full of things that are none of our business.
