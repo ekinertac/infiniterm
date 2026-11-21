@@ -356,10 +356,10 @@ fn serve(listener: UnixListener, opts: Options) -> ! {
     // snapshot: the ring to disk, tmp then rename so a reader never sees
     // half a file. See SNAPSHOT_INTERVAL. The normal exit below removes
     // the file: a shell that ended has nothing to salvage.
-    let ring_path = opts.socket.with_extension("ring");
+    let ring_file = Arc::new(RingFile::new(opts.socket.with_extension("ring")));
     {
         let ring = ring.clone();
-        let ring_path = ring_path.clone();
+        let ring_file = ring_file.clone();
         std::thread::spawn(move || {
             let mut written = 0u64;
             loop {
@@ -371,8 +371,11 @@ fn serve(listener: UnixListener, opts: Options) -> ! {
                     }
                     (r.generation(), r.replay())
                 };
-                if write_snapshot(&ring_path, &bytes).is_ok() {
-                    written = generation;
+                match ring_file.write(&bytes) {
+                    Ok(true) => written = generation,
+                    // The shell ended and the file is gone for good.
+                    Ok(false) => return,
+                    Err(_) => {}
                 }
             }
         });
@@ -386,7 +389,7 @@ fn serve(listener: UnixListener, opts: Options) -> ! {
         let client = client.clone();
         let socket_path = opts.socket.clone();
         let meta_path = meta_path.clone();
-        let ring_path = ring_path.clone();
+        let ring_file = ring_file.clone();
         std::thread::spawn(move || {
             let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
             if let Some(slot) = client.lock().unwrap().take() {
@@ -403,7 +406,7 @@ fn serve(listener: UnixListener, opts: Options) -> ! {
             }
             let _ = std::fs::remove_file(&socket_path);
             let _ = std::fs::remove_file(&meta_path);
-            let _ = std::fs::remove_file(&ring_path);
+            ring_file.close();
             std::process::exit(0);
         });
     }
@@ -535,6 +538,46 @@ fn write_snapshot(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// The ring's file beside the socket, with the one rule that orders the
+/// snapshot thread and the exit cleanup (#867): a snapshot holds the lock
+/// for its whole write and rename and writes nothing once the file is
+/// closed; closing takes the same lock, so it waits for a snapshot in
+/// flight, then removes `.ring` and any `.ring.tmp`. Before, a snapshot
+/// that was mid-write when the shell exited renamed the ring back after the
+/// cleanup removed it, and a finished session's ring stayed on disk.
+struct RingFile {
+    path: PathBuf,
+    closed: Mutex<bool>,
+}
+
+impl RingFile {
+    fn new(path: PathBuf) -> RingFile {
+        RingFile {
+            path,
+            closed: Mutex::new(false),
+        }
+    }
+
+    /// Writes a snapshot; `Ok(false)` once the file is closed, when the
+    /// snapshot thread has nothing left to do.
+    fn write(&self, bytes: &[u8]) -> std::io::Result<bool> {
+        let closed = self.closed.lock().unwrap();
+        if *closed {
+            return Ok(false);
+        }
+        write_snapshot(&self.path, bytes)?;
+        Ok(true)
+    }
+
+    /// The shell ended: no snapshot after this, and none left on disk.
+    fn close(&self) {
+        let mut closed = self.closed.lock().unwrap();
+        *closed = true;
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(self.path.with_extension("ring.tmp"));
+    }
+}
+
 fn run_client_reader(
     mut stream: UnixStream,
     epoch: u64,
@@ -646,4 +689,69 @@ fn rfc3339_now() -> String {
     let year = if month <= 2 { y + 1 } else { y };
 
     format!("{year:04}-{month:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+#[cfg(test)]
+mod ring_file_tests {
+    use super::RingFile;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("iftd-ring-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("s.ring")
+    }
+
+    #[test]
+    fn a_snapshot_lands_and_closing_removes_it_and_any_tmp() {
+        let path = temp("close");
+        let ring = RingFile::new(path.clone());
+        assert!(ring.write(b"hello").unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+        std::fs::write(path.with_extension("ring.tmp"), b"half").unwrap();
+        ring.close();
+        assert!(!path.exists());
+        assert!(!path.with_extension("ring.tmp").exists());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn nothing_is_written_after_closing() {
+        let path = temp("after");
+        let ring = RingFile::new(path.clone());
+        ring.close();
+        assert!(!ring.write(b"late").unwrap(), "closed: the thread stops");
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    // #867: a snapshot in flight when the shell exits must not put the
+    // ring back. Whatever the interleaving, nothing is left once close has
+    // returned and the writer has stopped.
+    #[test]
+    fn a_snapshot_racing_the_close_never_leaves_a_ring() {
+        for round in 0..20 {
+            let path = temp(&format!("race-{round}"));
+            let ring = Arc::new(RingFile::new(path.clone()));
+            // A short pause between writes: the lock is not fair, and a
+            // writer that takes it back at once starves `close` (the daemon
+            // writes once per two seconds, so it never does this).
+            let writer = {
+                let ring = ring.clone();
+                std::thread::spawn(move || {
+                    while ring.write(b"bytes").unwrap() {
+                        std::thread::sleep(std::time::Duration::from_micros(200));
+                    }
+                })
+            };
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            ring.close();
+            writer.join().unwrap();
+            assert!(!path.exists(), "round {round}: the ring came back");
+            assert!(!path.with_extension("ring.tmp").exists(), "round {round}");
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
+    }
 }
