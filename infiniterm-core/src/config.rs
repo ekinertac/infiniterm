@@ -455,6 +455,9 @@ pub struct Ui {
     /// Ctrl+Tab rows carry their agent state's colour, not only the dot
     /// (#746); off unless asked for.
     pub switcher_state_colors: bool,
+    /// `app.settings` (Cmd+,) opens the settings window instead of
+    /// settings.json beside the defaults (#745); off unless asked for.
+    pub settings: bool,
     /// A colour for the title bar and the Dock icon: a name from the picker or
     /// a hex code, empty for none (#160). A remote instance wears its host's.
     pub window_color: String,
@@ -738,6 +741,7 @@ pub fn default_config() -> Config {
             background_image_fade: 2.,
             workspace_isolation: false,
             switcher_state_colors: false,
+            settings: false,
             window_color: String::new(),
             card_opacity: 1.,
             card_gradient: Vec::new(),
@@ -1208,6 +1212,7 @@ pub fn merge_config(raw: &Value) -> Config {
             },
             workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
             switcher_state_colors: bool_(u.get("switcherStateColors"), d.ui.switcher_state_colors),
+            settings: bool_(u.get("settings"), d.ui.settings),
             window_color: u
                 .get("windowColor")
                 .and_then(Value::as_str)
@@ -2012,6 +2017,12 @@ mod tests {
                 .ui
                 .workspace_isolation
         );
+    }
+
+    #[test]
+    fn the_settings_window_is_off_unless_asked_for() {
+        assert!(!m(json!({})).ui.settings);
+        assert!(m(json!({"ui.settings": true})).ui.settings);
     }
 
     #[test]

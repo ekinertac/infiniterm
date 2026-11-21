@@ -138,6 +138,8 @@ pub mod schema_store;
 pub mod scroll_nav;
 pub mod scrollbar;
 pub mod settings_doc;
+pub mod settings_rows;
+pub mod settings_schema;
 pub mod shell_cmd;
 pub mod shell_history;
 pub mod shortcuts;
