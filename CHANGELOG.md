@@ -17,6 +17,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-17
 
+- `ift connect <host> --install` as a user other than root now puts `~/.local/bin` on the host's login PATH when the shell's profile does not already, so `ift` typed on the host (`ift phone add`, the hook installers) is found after a new login. It adds one marked line to `~/.profile`, and to `~/.bash_profile` or `~/.zprofile` if you have them, and says which files it changed. A profile that is a symlink (into a dotfiles repo, say) is left alone, and `ift` prints the line to add there yourself.
 - `ift phone add` warns when the pairing code holds only this machine's bare hostname (no `--host`, no Tailscale name), which a phone usually cannot reach, and says to pair again with `--host <address>` or to join Tailscale.
 - Fixed: on Linux, a phone paired with `ift phone add` keeps working after an update. It used to be tied to the `ift` of the version it was paired with, so it kept running the old one and stopped working once an update removed that version. A new pairing uses the installer's `~/.local/bin/ift`, and `ift phone list` names any phone paired the old way, with the commands that pair it again.
 - Fixed: while you zoom the canvas, a browser card's page now keeps up with its border. Before, zooming in left the page drawn small in the card's top-left corner for a moment before it filled the card. During a zoom the card shows a picture of the page, and the live page is back a moment after you stop.
