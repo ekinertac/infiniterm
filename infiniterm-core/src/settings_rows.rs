@@ -45,6 +45,23 @@ pub struct Row {
     pub value: Value,
     /// settings.json names this key, so the row is marked and can be reset.
     pub set: bool,
+    /// What settings.json itself holds for the key, when it names it. A
+    /// list row edits this rather than `value`: the merge drops a search
+    /// engine that is not complete yet, and the person is still typing it.
+    pub raw: Option<Value>,
+}
+
+impl Row {
+    /// The list a list row edits: the file's own when it has one, else the
+    /// value in force.
+    pub fn list(&self) -> Vec<Value> {
+        self.raw
+            .as_ref()
+            .unwrap_or(&self.value)
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 /// What an edit does to settings.json.
@@ -105,6 +122,7 @@ pub fn rows(settings_text: &str) -> Vec<Row> {
             section,
             value: in_force.get(key).cloned().unwrap_or(Value::Null),
             set: user.contains_key(key),
+            raw: user.get(key).cloned(),
         })
         .collect()
 }
@@ -252,13 +270,91 @@ pub fn title(key: &str) -> String {
         .join(" ")
 }
 
-/// The first line of a key's doc text, the row's subtitle.
-pub fn summary(key: &str) -> &'static str {
-    SETTINGS_DOC
+/// The first sentence of a key's doc text, the row's subtitle. The doc is
+/// stored as lines wrapped for the defaults file, so the first LINE stops
+/// mid-sentence ("by file name without the extension, from"); the lines
+/// are joined and cut after the first full stop that ends a sentence.
+pub fn summary(key: &str) -> String {
+    let text = SETTINGS_DOC
         .iter()
         .find(|(k, _)| *k == key)
-        .and_then(|(_, lines)| lines.first().copied())
-        .unwrap_or("")
+        .map(|(_, lines)| lines.join(" "))
+        .unwrap_or_default();
+    match text.find(". ") {
+        Some(end) => text[..=end].to_string(),
+        None => text,
+    }
+}
+
+/// `list` with item `i` replaced, or `item` added at the end when `i` is
+/// past the last (the row's "Add" opens a field one past the end).
+pub fn list_set(list: &[Value], i: usize, item: Value) -> Value {
+    let mut out = list.to_vec();
+    match out.get_mut(i) {
+        Some(slot) => *slot = item,
+        None => out.push(item),
+    }
+    Value::Array(out)
+}
+
+/// `list` without item `i`.
+pub fn list_remove(list: &[Value], i: usize) -> Value {
+    Value::Array(
+        list.iter()
+            .enumerate()
+            .filter(|(n, _)| *n != i)
+            .map(|(_, v)| v.clone())
+            .collect(),
+    )
+}
+
+/// The three parts of a `browser.engines` entry, in the order the row
+/// shows them.
+pub const ENGINE_FIELDS: [&str; 3] = ["keyword", "name", "searchUrl"];
+
+/// Engine `i` with one of its parts set, the others kept (a new engine
+/// starts with all three empty).
+pub fn engine_set(list: &[Value], i: usize, part: &str, text: &str) -> Value {
+    let mut engine = list
+        .get(i)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_else(|| {
+            ENGINE_FIELDS
+                .iter()
+                .map(|f| (f.to_string(), Value::from("")))
+                .collect()
+        });
+    engine.insert(part.to_string(), Value::from(text));
+    list_set(list, i, Value::Object(engine))
+}
+
+/// Why an engine is not used yet, as `merge_config` decides it: a part is
+/// missing, or the search address has no `%s` for the words.
+pub fn engine_problem(engine: &Value) -> Option<&'static str> {
+    let text = |f: &str| engine.get(f).and_then(Value::as_str).unwrap_or("");
+    if text("keyword").is_empty() || text("name").is_empty() {
+        Some("not used yet: it needs a keyword and a name")
+    } else if !text("searchUrl").contains("%s") {
+        Some("not used yet: the search address needs %s where the words go")
+    } else {
+        None
+    }
+}
+
+/// The items of a picker that answer what was typed, best first; all of
+/// them in their own order when nothing was typed.
+pub fn pick_matches<'a>(items: &'a [String], query: &str) -> Vec<&'a str> {
+    let q = query.trim();
+    if q.is_empty() {
+        return items.iter().map(String::as_str).collect();
+    }
+    let mut scored: Vec<(f64, &str)> = items
+        .iter()
+        .filter_map(|i| crate::fuzzy::fuzzy_match(q, i).map(|m| (m.score, i.as_str())))
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.into_iter().map(|(_, i)| i).collect()
 }
 
 /// True when `row` answers the search `query`: every word of it appears in
@@ -415,6 +511,62 @@ mod tests {
     }
 
     #[test]
+    fn a_list_row_edits_what_the_file_holds() {
+        // Incomplete: the merge drops it, the row keeps it.
+        let rows = rows(r#"{ "browser.engines": [{ "keyword": "gh" }] }"#);
+        let engines = row(&rows, "browser.engines");
+        assert_eq!(engines.value, json!([]));
+        assert_eq!(engines.list(), vec![json!({ "keyword": "gh" })]);
+        let rows = super::rows("{}");
+        assert!(row(&rows, "terminal.env").list().is_empty());
+    }
+
+    #[test]
+    fn list_items_are_set_added_and_removed() {
+        let list = vec![json!("A=1"), json!("B=2")];
+        assert_eq!(list_set(&list, 1, json!("B=3")), json!(["A=1", "B=3"]));
+        assert_eq!(
+            list_set(&list, 2, json!("C=1")),
+            json!(["A=1", "B=2", "C=1"])
+        );
+        assert_eq!(list_remove(&list, 0), json!(["B=2"]));
+        assert_eq!(list_remove(&list, 9), json!(["A=1", "B=2"]));
+    }
+
+    #[test]
+    fn an_engine_is_built_one_part_at_a_time_and_says_what_it_lacks() {
+        let new = engine_set(&[], 0, "keyword", "gh");
+        assert_eq!(
+            new,
+            json!([{ "keyword": "gh", "name": "", "searchUrl": "" }])
+        );
+        let list = new.as_array().unwrap().clone();
+        assert!(engine_problem(&list[0]).unwrap().contains("name"));
+        let named = engine_set(&list, 0, "name", "GitHub");
+        let url = engine_set(named.as_array().unwrap(), 0, "searchUrl", "https://x/?q=");
+        assert!(engine_problem(&url[0]).unwrap().contains("%s"));
+        let ok = engine_set(url.as_array().unwrap(), 0, "searchUrl", "https://x/?q=%s");
+        assert_eq!(engine_problem(&ok[0]), None);
+        // The merge agrees: a complete engine is in force.
+        let config = merge_config(&json!({ "browser.engines": ok }));
+        assert_eq!(config.browser.engines.len(), 1);
+    }
+
+    #[test]
+    fn a_picker_lists_everything_until_something_is_typed() {
+        let items: Vec<String> = ["Dracula", "Solarized Dark", "Violite"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            pick_matches(&items, ""),
+            vec!["Dracula", "Solarized Dark", "Violite"]
+        );
+        assert_eq!(pick_matches(&items, "sol")[0], "Solarized Dark");
+        assert!(pick_matches(&items, "zzz").is_empty());
+    }
+
+    #[test]
     fn a_key_reads_as_a_title() {
         assert_eq!(title("terminal.fontFamily"), "Terminal Font Family");
         assert_eq!(title("theme"), "Theme");
@@ -442,6 +594,11 @@ mod tests {
             "Whether the cursor blinks."
         );
         assert_eq!(summary("nope"), "");
+        // A sentence that runs over two stored lines comes out whole.
+        let theme = summary("theme");
+        assert!(theme.starts_with("Terminal colour scheme"), "{theme}");
+        assert!(theme.ends_with('.'), "{theme}");
+        assert!(!theme.contains("Five"), "only the first sentence: {theme}");
     }
 
     #[test]
