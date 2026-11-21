@@ -156,6 +156,7 @@ pub const THEME_SCHEMA: &[(&str, Kind, ThemeGroup)] = &[
     ("tab.border", ColorWord, ThemeGroup::Tabs),
     ("tab.activeBorder", ColorWord, ThemeGroup::Tabs),
     ("tab.separator", ColorWord, ThemeGroup::Tabs),
+    ("tab.separatorAroundActive", Bool, ThemeGroup::Tabs),
     ("tab.radius", Number, ThemeGroup::Tabs),
     ("tab.paddingX", Number, ThemeGroup::Tabs),
     ("tab.icons", Bool, ThemeGroup::Tabs),
