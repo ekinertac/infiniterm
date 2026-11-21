@@ -150,6 +150,10 @@ impl AppView {
             extracted: Default::default(),
             extracted_size: Default::default(),
             extract_request: None,
+            settings_window: None,
+            settings_request: false,
+            settings_gen: 0,
+            settings_gen_drawn: 0,
             #[cfg(not(target_os = "macos"))]
             title_press: None,
             menu_anchor: (0., 0.),
@@ -506,6 +510,7 @@ impl AppView {
                 }
                 // An app link the person said yes to (#668). `open` is waited
                 // for, so a scheme no app owns is said, not silent.
+                Effect::OpenSettingsWindow => self.settings_request = true,
                 Effect::OpenAppLink(url) => {
                     let scheme = infiniterm_core::app_link::scheme(&url).unwrap_or_default();
                     if let Err(e) = infiniterm_core::links_fs::open_app_link(&url) {
@@ -953,6 +958,7 @@ impl AppView {
             match change.file {
                 ConfigFile::Settings => {
                     self.apply_settings_text(&change.contents);
+                    self.settings_gen += 1;
                     if let Some(hub) = &self.join {
                         hub.publish_config(
                             infiniterm_core::backend::join::KIND_SETTINGS,

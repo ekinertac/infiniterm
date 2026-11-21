@@ -373,9 +373,21 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("ui.scale.reset", "App: interface at 100%", |m| {
         m.set_ui_scale(1.)
     });
+    // With `ui.settings` on, Cmd+, opens the settings window (#745). A joined
+    // window keeps the files: its settings are the host's, and the window is
+    // out of scope for viewers.
+    r.register("app.settings", "App: open settings", |m| {
+        if m.config.ui.settings && !(m.read_only && m.snapshot_seen) {
+            m.effects.push(Effect::OpenSettingsWindow);
+        } else {
+            m.open_config_pair(false);
+        }
+    });
+    // The file stays one command away whichever way Cmd+, goes, so the
+    // window never hides it (and nothing is mouse-only).
     r.register(
-        "app.settings",
-        "App: open settings, beside the defaults",
+        "app.settings.file",
+        "App: open settings.json, beside the defaults",
         |m| m.open_config_pair(false),
     );
     r.register("help.docs", "Help: open the docs", |m| {

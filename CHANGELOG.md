@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-21
+
+- A settings window, off unless you turn on `ui.settings`: Cmd+, then opens a window with every setting by section, a search field across all of them, and a Reset button on the ones you changed. Tick a checkbox, pick from a list or type a number, text or colour (Enter applies it); the change lands in settings.json at once with your comments kept, and a value the app would refuse is refused with the reason. Fonts, themes, the starting folder, lists and search engines still open settings.json from their row. "App: open settings.json" in the palette opens the file either way.
+
 ### 2026-11-20
 
 - A saved workspace can keep the agent sessions running in its cards, so Claude Code (or Codex, OpenCode, Cursor, Antigravity) picks up where it was after you open the workspace again. Turn on `cards.savedWorkspaceKeepsAgentSessions` and "Workspace: save as…" keeps them. A card opened from such a workspace starts a new shell that shows the resume command, and pressing Up then Enter runs it. Nothing starts by itself.

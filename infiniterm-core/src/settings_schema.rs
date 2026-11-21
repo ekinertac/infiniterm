@@ -124,6 +124,7 @@ pub const SETTINGS_SCHEMA: &[(&str, Kind, Section)] = &[
     ),
     ("join.enabled", Bool, General),
     ("ui.hideRemoteBranches", Bool, General),
+    ("ui.settings", Bool, General),
     ("ui.switcherStateColors", Bool, General),
     ("ui.showWhatsNew", Bool, General),
     ("terminal.shell", Text, Terminal),

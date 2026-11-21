@@ -82,6 +82,7 @@ mod page_body;
 mod paint;
 mod runtime;
 mod scrollbar;
+mod settings_window;
 #[cfg(target_os = "macos")]
 mod spelling;
 mod switcher_view;
@@ -407,6 +408,17 @@ pub struct AppView {
     /// Set by a key, opened by the poll task (`own_window::CardWindow::open`
     /// must not run inside an app update).
     pub extract_request: Option<String>,
+    /// The settings window (#745), while it is open: Cmd+, raises it
+    /// instead of opening a second one.
+    pub settings_window: Option<gpui::WindowHandle<settings_window::SettingsWindow>>,
+    /// Set by `Effect::OpenSettingsWindow`, acted on by the poll task (a
+    /// window must not open inside an app update).
+    pub settings_request: bool,
+    /// Bumped each time settings.json is applied from the file, so the poll
+    /// task can tell the settings window to read it again; `_drawn` is the
+    /// last one the window was told about.
+    pub settings_gen: u64,
+    pub settings_gen_drawn: u64,
     /// `ift read` requests the poll timer answers once the output is parsed.
     pub read_requests: Vec<crate::terminals::ReadRequest>,
     pub shortcuts_scroll: gpui::ScrollHandle,
@@ -914,6 +926,45 @@ fn main() {
                                 this.extracted.insert(card, handle);
                             });
                         }
+                    }
+                    // The settings window (#745), opened or raised here for
+                    // the same reason as extraction: outside the app update.
+                    let (wants_settings, settings_open) = poll
+                        .update(cx, |this, _| {
+                            (std::mem::take(&mut this.settings_request), this.settings_window)
+                        })
+                        .unwrap_or((false, None));
+                    if wants_settings {
+                        let raised = settings_open.is_some_and(|h| {
+                            h.update(cx, |_, window, _| window.activate_window()).is_ok()
+                        });
+                        if !raised {
+                            let app = poll.clone();
+                            let opened = cx
+                                .update(|cx| settings_window::SettingsWindow::open(app, cx))
+                                .ok()
+                                .flatten();
+                            let _ = poll.update(cx, |this, _| {
+                                this.settings_window = opened;
+                                this.settings_gen_drawn = this.settings_gen;
+                            });
+                        }
+                    }
+                    // settings.json changed outside the window: it reads the
+                    // file again.
+                    let stale = poll
+                        .update(cx, |this, _| {
+                            let stale = this.settings_gen != this.settings_gen_drawn;
+                            this.settings_gen_drawn = this.settings_gen;
+                            stale.then_some(this.settings_window).flatten()
+                        })
+                        .ok()
+                        .flatten();
+                    if let Some(handle) = stale {
+                        let _ = handle.update(cx, |w, window, _| {
+                            w.reload();
+                            window.refresh();
+                        });
                     }
                     // An extracted card's window repaints when its body has
                     // output or a blink is due, as the canvas does.
