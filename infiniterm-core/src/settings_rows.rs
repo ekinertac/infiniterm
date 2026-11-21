@@ -31,7 +31,7 @@
 use crate::config::{flatten, merge_config, Config};
 use crate::jsonc::{parse_jsonc, patch_json_text, remove_key};
 use crate::settings_doc::SETTINGS_DOC;
-use crate::settings_schema::{Kind, Section, SETTINGS_SCHEMA};
+use crate::settings_schema::{Kind, Section, ThemeGroup, SETTINGS_SCHEMA, THEME_SCHEMA};
 use serde_json::{Map, Value};
 
 /// One row of the window.
@@ -49,18 +49,21 @@ pub struct Row {
     /// list row edits this rather than `value`: the merge drops a search
     /// engine that is not complete yet, and the person is still typing it.
     pub raw: Option<Value>,
+    /// A ui theme key's group on the UI Theme page; `None` for a
+    /// settings.json key. A theme row's `section` means nothing.
+    pub theme: Option<ThemeGroup>,
 }
 
 impl Row {
     /// The list a list row edits: the file's own when it has one, else the
     /// value in force.
     pub fn list(&self) -> Vec<Value> {
-        self.raw
-            .as_ref()
-            .unwrap_or(&self.value)
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        match self.raw.as_ref().unwrap_or(&self.value) {
+            Value::Array(items) => items.clone(),
+            // `ui.backgroundImage` may be one picture rather than a list.
+            Value::String(one) if !one.is_empty() => vec![Value::from(one.clone())],
+            _ => vec![],
+        }
     }
 }
 
@@ -123,6 +126,7 @@ pub fn rows(settings_text: &str) -> Vec<Row> {
             value: in_force.get(key).cloned().unwrap_or(Value::Null),
             set: user.contains_key(key),
             raw: user.get(key).cloned(),
+            theme: None,
         })
         .collect()
 }
@@ -202,9 +206,18 @@ pub fn parse_field(kind: Kind, text: &str) -> Result<Value, String> {
         Kind::Text | Kind::Font | Kind::Folder | Kind::TerminalTheme | Kind::UiTheme => {
             Ok(Value::from(text))
         }
-        Kind::Bool | Kind::Choice(_) | Kind::TextList | Kind::NumberList | Kind::SearchEngines => {
-            Err("not edited as text".to_string())
-        }
+        // A colour or one of the theme's words; `ui_theme::parse` judges it
+        // when the theme is written, with its own message.
+        Kind::ColorWord => Ok(Value::from(t)),
+        Kind::Bool
+        | Kind::Choice(_)
+        | Kind::TextList
+        | Kind::NumberList
+        | Kind::SearchEngines
+        | Kind::ColorPair
+        | Kind::PathList
+        | Kind::IconMap
+        | Kind::NameList(_) => Err("not edited as text".to_string()),
     }
 }
 
@@ -275,11 +288,7 @@ pub fn title(key: &str) -> String {
 /// mid-sentence ("by file name without the extension, from"); the lines
 /// are joined and cut after the first full stop that ends a sentence.
 pub fn summary(key: &str) -> String {
-    let text = SETTINGS_DOC
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, lines)| lines.join(" "))
-        .unwrap_or_default();
+    let text = doc_text(key);
     match text.find(". ") {
         Some(end) => text[..=end].to_string(),
         None => text,
@@ -357,16 +366,171 @@ pub fn pick_matches<'a>(items: &'a [String], query: &str) -> Vec<&'a str> {
     scored.into_iter().map(|(_, i)| i).collect()
 }
 
+/// A key's doc text, lines joined: `SETTINGS_DOC` holds the settings keys
+/// and the look keys, `ui_theme::BAR_KEYS` the other theme keys.
+fn doc_text(key: &str) -> String {
+    SETTINGS_DOC
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, lines)| lines.join(" "))
+        .or_else(|| {
+            crate::ui_theme::BAR_KEYS
+                .iter()
+                .find(|(k, _, _)| *k == key)
+                .map(|(_, lines, _)| lines.join(" "))
+        })
+        .unwrap_or_default()
+}
+
+/// The theme a fresh file starts from when the theme's file is empty or
+/// missing: an empty object, which `patch_json_text` can add to.
+const THEME_EMPTY: &str = "{\n}\n";
+
+/// The built-in value of a look key (the defaults' `ui` section); `None`
+/// for a bar key, whose built-in look has no value to show.
+pub fn theme_builtin(key: &str) -> Option<Value> {
+    let short = key.strip_prefix("ui.")?;
+    let ui = serde_json::to_value(crate::config::default_config().ui).ok()?;
+    ui.get(short).cloned()
+}
+
+/// The UI Theme page's rows for a theme file's text: the file's value, else
+/// the built-in one (`Null` for a bar key the file does not set).
+pub fn theme_rows(theme_text: &str) -> Vec<Row> {
+    let file = parse_jsonc(theme_text)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    THEME_SCHEMA
+        .iter()
+        .map(|&(key, kind, group)| {
+            let raw = file.get(key).cloned();
+            Row {
+                key,
+                kind,
+                section: Section::General,
+                value: raw
+                    .clone()
+                    .or_else(|| theme_builtin(key))
+                    .unwrap_or(Value::Null),
+                set: raw.is_some(),
+                raw,
+                theme: Some(group),
+            }
+        })
+        .collect()
+}
+
+/// `write_for` for a theme key: a look key's built-in value removes it.
+pub fn theme_write_for(key: &str, value: Value) -> Write {
+    match theme_builtin(key) {
+        Some(d) if same(&d, &value) => Write::Remove,
+        _ => Write::Set(value),
+    }
+}
+
+/// `apply` for a ui theme file: patched the same way, and refused with
+/// `ui_theme::parse`'s reason when the theme would not load.
+pub fn theme_apply(theme_text: &str, key: &str, write: &Write) -> Result<Option<String>, String> {
+    let base = if theme_text.trim().is_empty() {
+        THEME_EMPTY
+    } else {
+        theme_text
+    };
+    let next = match write {
+        Write::Set(value) => patch_json_text(base, key, value),
+        Write::Remove => remove_key(base, key),
+    };
+    let Some(next) = next else {
+        return Ok(None);
+    };
+    crate::ui_theme::parse(&next)?;
+    Ok(Some(next))
+}
+
+/// `tab.iconMap`'s entries in the file's order, as program and icon.
+pub fn map_entries(map: &Value) -> Vec<(String, String)> {
+    map.as_object()
+        .map(|o| {
+            o.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The map with entry `i` set from `program=icon` text (added at the end
+/// when `i` is past the last), or why the text is not an entry. One cell
+/// for both halves, because an entry with an empty icon is refused.
+pub fn map_set(map: &Value, i: usize, text: &str) -> Result<Value, String> {
+    let (program, icon) = text
+        .split_once('=')
+        .map(|(p, v)| (p.trim(), v.trim()))
+        .filter(|(p, v)| !p.is_empty() && !v.is_empty())
+        .ok_or("program=icon, for example claude=\u{f544}")?;
+    let mut entries = map_entries(map);
+    match entries.get_mut(i) {
+        Some(slot) => *slot = (program.to_string(), icon.to_string()),
+        None => entries.push((program.to_string(), icon.to_string())),
+    }
+    Ok(Value::Object(
+        entries
+            .into_iter()
+            .map(|(k, v)| (k, Value::from(v)))
+            .collect(),
+    ))
+}
+
+/// The map without entry `i`.
+pub fn map_remove(map: &Value, i: usize) -> Value {
+    Value::Object(
+        map_entries(map)
+            .into_iter()
+            .enumerate()
+            .filter(|(n, _)| *n != i)
+            .map(|(_, (k, v))| (k, Value::from(v)))
+            .collect(),
+    )
+}
+
+/// A name list with `name` taken out if it is in, or added at the end.
+pub fn name_toggle(list: &[Value], name: &str) -> Value {
+    if list.iter().any(|v| v.as_str() == Some(name)) {
+        Value::Array(
+            list.iter()
+                .filter(|v| v.as_str() != Some(name))
+                .cloned()
+                .collect(),
+        )
+    } else {
+        let mut out = list.to_vec();
+        out.push(Value::from(name));
+        Value::Array(out)
+    }
+}
+
+/// A name for a copy of the built-in look that no theme has yet:
+/// `my-theme`, then `my-theme-2`, `my-theme-3` and so on.
+pub fn copy_name(existing: &[String]) -> String {
+    const BASE: &str = "my-theme";
+    if !existing.iter().any(|e| e == BASE) {
+        return BASE.to_string();
+    }
+    (2..)
+        .map(|n| format!("{BASE}-{n}"))
+        .find(|name| !existing.contains(name))
+        .expect("an unused name")
+}
+
 /// True when `row` answers the search `query`: every word of it appears in
 /// the key, the section's title or the key's doc text, ignoring case. An
 /// empty query matches every row.
 pub fn matches(row: &Row, query: &str) -> bool {
-    let doc = SETTINGS_DOC
-        .iter()
-        .find(|(k, _)| *k == row.key)
-        .map(|(_, lines)| lines.join(" "))
-        .unwrap_or_default();
-    let hay = format!("{} {} {}", row.key, row.section.title(), doc).to_lowercase();
+    let place = match row.theme {
+        Some(group) => format!("UI Theme {}", group.title()),
+        None => row.section.title().to_string(),
+    };
+    let hay = format!("{} {} {}", row.key, place, doc_text(row.key)).to_lowercase();
     query
         .split_whitespace()
         .all(|w| hay.contains(&w.to_lowercase()))
@@ -564,6 +728,110 @@ mod tests {
         );
         assert_eq!(pick_matches(&items, "sol")[0], "Solarized Dark");
         assert!(pick_matches(&items, "zzz").is_empty());
+    }
+
+    #[test]
+    fn theme_rows_show_the_file_else_the_builtin_look() {
+        let rows = theme_rows("{ // mine\n \"ui.windowOpacity\": 0.8, \"tab.radius\": 6 }");
+        assert_eq!(rows.len(), crate::settings_schema::THEME_SCHEMA.len());
+        let opacity = row(&rows, "ui.windowOpacity");
+        assert!(opacity.set && same(&opacity.value, &json!(0.8)));
+        assert_eq!(opacity.theme, Some(ThemeGroup::Window));
+        let blur = row(&rows, "ui.windowBlur");
+        assert!(!blur.set);
+        assert_eq!(Some(blur.value.clone()), theme_builtin("ui.windowBlur"));
+        // A bar key the file does not set has no value to show.
+        assert_eq!(row(&rows, "titlebar.border").value, Value::Null);
+        assert!(row(&rows, "tab.radius").set);
+        // An empty or missing file is the built-in look.
+        assert!(theme_rows("").iter().all(|r| !r.set));
+    }
+
+    #[test]
+    fn a_theme_edit_is_checked_by_the_theme_parser_and_keeps_comments() {
+        let text = "{\n  // my look\n  \"ui.cardRadius\": 8\n}\n";
+        let next = theme_apply(text, "titlebar.background", &Write::Set(json!("canvas")))
+            .unwrap()
+            .unwrap();
+        assert!(
+            next.contains("// my look") && next.contains("\"titlebar.background\": \"canvas\"")
+        );
+        let err = theme_apply(text, "titlebar.background", &Write::Set(json!("blue"))).unwrap_err();
+        assert!(err.contains("titlebar.background"), "{err}");
+        let gone = theme_apply(text, "ui.cardRadius", &Write::Remove)
+            .unwrap()
+            .unwrap();
+        assert!(!gone.contains("cardRadius"));
+        // An empty file gets an object to add to.
+        let fresh = theme_apply("", "tab.radius", &Write::Set(json!(4)))
+            .unwrap()
+            .unwrap();
+        assert!(crate::ui_theme::parse(&fresh).is_ok());
+        assert!(fresh.contains("\"tab.radius\": 4"));
+    }
+
+    #[test]
+    fn a_look_key_back_at_its_builtin_value_is_removed() {
+        let builtin = theme_builtin("ui.windowOpacity").unwrap();
+        assert_eq!(theme_write_for("ui.windowOpacity", builtin), Write::Remove);
+        assert_eq!(
+            theme_write_for("ui.windowOpacity", json!(0.5)),
+            Write::Set(json!(0.5))
+        );
+        // A bar key has no built-in value: what is set is written.
+        assert_eq!(
+            theme_write_for("tab.radius", json!(0)),
+            Write::Set(json!(0))
+        );
+    }
+
+    #[test]
+    fn icon_map_entries_are_one_cell_each() {
+        let map = json!({ "claude": "a" });
+        assert_eq!(map_entries(&map), vec![("claude".into(), "a".into())]);
+        assert_eq!(
+            map_set(&map, 1, "vim = b").unwrap(),
+            json!({ "claude": "a", "vim": "b" })
+        );
+        assert_eq!(
+            map_set(&map, 0, "codex=c").unwrap(),
+            json!({ "codex": "c" })
+        );
+        assert!(
+            map_set(&map, 1, "vim=").is_err(),
+            "an empty icon is refused"
+        );
+        assert!(map_set(&map, 1, "nothing").is_err());
+        assert_eq!(map_remove(&map, 0), json!({}));
+        // What it builds, the theme takes.
+        let built = map_set(&json!({}), 0, "claude=x").unwrap();
+        assert!(crate::ui_theme::parse(&json!({ "tab.iconMap": built }).to_string()).is_ok());
+    }
+
+    #[test]
+    fn a_name_is_toggled_in_and_out_of_its_list() {
+        let list = vec![json!("close")];
+        assert_eq!(name_toggle(&list, "maximise"), json!(["close", "maximise"]));
+        assert_eq!(name_toggle(&list, "close"), json!([]));
+    }
+
+    #[test]
+    fn a_copy_gets_a_name_no_theme_has() {
+        assert_eq!(copy_name(&["default".into()]), "my-theme");
+        assert_eq!(
+            copy_name(&["my-theme".into(), "my-theme-2".into()]),
+            "my-theme-3"
+        );
+        assert!(crate::ui_theme::valid_name(&copy_name(&[])));
+    }
+
+    #[test]
+    fn theme_keys_are_searched_and_summarised_from_their_own_docs() {
+        let rows = theme_rows("");
+        let radius = row(&rows, "tab.radius");
+        assert!(matches(radius, "ui theme workspace"));
+        assert!(!summary("titlebar.border").is_empty());
+        assert!(!summary("ui.windowOpacity").is_empty());
     }
 
     #[test]

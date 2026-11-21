@@ -29,6 +29,13 @@
 //! row says why. No AppKit-only part, so it draws the same on every system.
 //! The window's frame is kept in `settings-window.json` (`window_state.rs`).
 //!
+//! UI Theme page (third PR): the ui theme file `ui.theme` names
+//! (`settings_schema::THEME_SCHEMA`, `settings_rows::theme_rows`), written
+//! through `theme_apply` so `ui_theme::parse` refuses what would not load.
+//! The built-in theme (`default`) is not edited: "Make a copy" writes it
+//! under a new name and points `ui.theme` at the copy. Theme rows are in
+//! the search too, under "UI Theme".
+//!
 //! Related: main.rs (the poll task that opens, raises and refreshes it),
 //! runtime.rs (`Effect::OpenSettingsWindow`, `settings_gen`), field.rs (the
 //! text field), own_window.rs (the other second window), chrome.rs.
@@ -41,9 +48,10 @@ use gpui::{
     UTF16Selection, Window, WindowBounds, WindowHandle, WindowOptions,
 };
 
-use infiniterm_core::config_files::{config_read, config_write, ConfigFile};
+use infiniterm_core::config_files::{self, config_read, config_write, ConfigFile};
 use infiniterm_core::settings_rows::{self, Row, Write};
-use infiniterm_core::settings_schema::{Kind, Section};
+use infiniterm_core::settings_schema::{self, Kind, Section};
+use infiniterm_core::ui_theme;
 use serde_json::Value;
 
 use crate::chrome::Chrome;
@@ -79,6 +87,9 @@ const HEADER_FONT_PX: f32 = 12.;
 const PICKER_W_PX: f32 = 320.;
 const PICKER_H_PX: f32 = 260.;
 const PICKER_MAX_ROWS: usize = 300;
+/// The "Make a copy" name field's target key: not a setting, so it can
+/// never collide with a row.
+const COPY_KEY: &str = "\u{0}copy";
 /// Settings files are small; a write that fails says so in the row.
 const SETTINGS_EMPTY: &str = "{\n}\n";
 
@@ -129,6 +140,12 @@ pub struct SettingsWindow {
     /// Text an input method is composing (`ime.rs` does the same for the
     /// main window).
     composing: Option<String>,
+    /// The UI Theme page is showing instead of a section.
+    theme_page: bool,
+    /// The ui theme `ui.theme` names, and its file's text (empty when the
+    /// file is missing: the built-in look).
+    theme_name: String,
+    theme_text: String,
 }
 
 impl SettingsWindow {
@@ -162,18 +179,25 @@ impl SettingsWindow {
                 closing.update(cx, |a, _| a.settings_window = None);
                 true
             });
-            let view = cx.new(|_| SettingsWindow {
-                app,
-                focus: focus.clone(),
-                text: read_settings(),
-                section: Section::General,
-                search: Field::default(),
-                editing: None,
-                choosing: None,
-                picking: None,
-                saved_frame: saved,
-                error: None,
-                composing: None,
+            let view = cx.new(|_| {
+                let mut w = SettingsWindow {
+                    app,
+                    focus: focus.clone(),
+                    text: String::new(),
+                    section: Section::General,
+                    search: Field::default(),
+                    editing: None,
+                    choosing: None,
+                    picking: None,
+                    saved_frame: saved,
+                    error: None,
+                    composing: None,
+                    theme_page: false,
+                    theme_name: String::new(),
+                    theme_text: String::new(),
+                };
+                w.reload();
+                w
             });
             window.focus(&focus);
             view
@@ -185,6 +209,26 @@ impl SettingsWindow {
     /// read it again. An open field is kept, since its text is the person's.
     pub fn reload(&mut self) {
         self.text = read_settings();
+        self.theme_name = settings_rows::rows(&self.text)
+            .into_iter()
+            .find(|r| r.key == "ui.theme")
+            .and_then(|r| r.value.as_str().map(String::from))
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| ui_theme::DEFAULT_NAME.to_string());
+        self.theme_text = config_files::ui_theme_read(&self.theme_name).unwrap_or_default();
+    }
+
+    /// Every row: the settings, then the ui theme's.
+    fn all_rows(&self) -> Vec<Row> {
+        let mut rows = settings_rows::rows(&self.text);
+        rows.extend(settings_rows::theme_rows(&self.theme_text));
+        rows
+    }
+
+    /// True while the ui theme in force is the built-in one, which the page
+    /// does not edit: "Make a copy" makes one of your own (#745).
+    fn theme_is_builtin(&self) -> bool {
+        self.theme_name == ui_theme::DEFAULT_NAME
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -195,16 +239,38 @@ impl SettingsWindow {
 
     /// The list a list row edits, from the text as it is now.
     fn list_of(&self, key: &str) -> Vec<Value> {
-        settings_rows::rows(&self.text)
-            .into_iter()
-            .find(|r| r.key == key)
-            .map(|r| r.list())
-            .unwrap_or_default()
+        self.row_of(key).map(|r| r.list()).unwrap_or_default()
+    }
+
+    fn row_of(&self, key: &str) -> Option<Row> {
+        self.all_rows().into_iter().find(|r| r.key == key)
+    }
+
+    /// What a key's value looks like in the file, for the edits that change
+    /// one part of it (an icon map entry, a gradient stop).
+    fn raw_of(&self, key: &str) -> Value {
+        self.row_of(key)
+            .map(|r| r.raw.unwrap_or(r.value))
+            .unwrap_or(Value::Null)
+    }
+
+    /// Sets `key` to `value`: removed instead when it is the default.
+    fn set(&mut self, key: &'static str, value: Value) {
+        let write = if settings_schema::theme_kind_of(key).is_some() {
+            settings_rows::theme_write_for(key, value)
+        } else {
+            settings_rows::write_for(key, value)
+        };
+        self.write(key, write);
     }
 
     /// Writes one edit and keeps the new text, or keeps the reason it was
-    /// refused for the row to show.
+    /// refused for the row to show. A ui theme key goes to the theme's file.
     fn write(&mut self, key: &'static str, write: Write) {
+        if settings_schema::theme_kind_of(key).is_some() {
+            self.write_theme(key, write);
+            return;
+        }
         match settings_rows::apply(&self.text, key, &write) {
             Ok(Some(next)) => match config_write(ConfigFile::Settings, &next) {
                 Ok(()) => {
@@ -218,16 +284,74 @@ impl SettingsWindow {
         }
     }
 
+    fn write_theme(&mut self, key: &'static str, write: Write) {
+        if self.theme_is_builtin() {
+            self.error = Some((
+                key,
+                "this is the built-in look: make a copy at the top of UI Theme to change it".into(),
+            ));
+            return;
+        }
+        match settings_rows::theme_apply(&self.theme_text, key, &write) {
+            Ok(Some(next)) => match config_files::ui_theme_write(&self.theme_name, &next) {
+                Ok(()) => {
+                    self.theme_text = next;
+                    self.error = None;
+                }
+                Err(e) => self.error = Some((key, format!("could not write the ui theme: {e}"))),
+            },
+            Ok(None) => self.error = None,
+            Err(e) => self.error = Some((key, e)),
+        }
+    }
+
+    /// "Make a copy": the built-in look (its file if there is one, which
+    /// may hold the look settings moved there in #511, else the reference
+    /// text) under `name`, and `ui.theme` pointed at it.
+    fn make_copy(&mut self, name: &str) {
+        let name = name.trim();
+        let taken = config_files::list_ui_themes();
+        let why = if !ui_theme::valid_name(name) || name == ui_theme::DEFAULT_NAME {
+            Some("a plain file name other than default")
+        } else if taken.iter().any(|t| t == name) {
+            Some("a ui theme with that name exists; pick another")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            self.error = Some((COPY_KEY, format!("the copy's name should be {why}")));
+            return;
+        }
+        let text = if self.theme_text.trim().is_empty() {
+            infiniterm_core::settings_doc::default_ui_theme_text()
+        } else {
+            self.theme_text.clone()
+        };
+        if let Err(e) = config_files::ui_theme_write(name, &text) {
+            self.error = Some((COPY_KEY, format!("could not write the copy: {e}")));
+            return;
+        }
+        self.write("ui.theme", Write::Set(Value::from(name)));
+        self.theme_name = name.to_string();
+        self.theme_text = text;
+    }
+
     /// The open field's text goes in, or stays open with the reason.
     fn commit(&mut self) {
         let Some((target, field)) = self.editing.take() else {
             return;
         };
         let key = target.key;
-        let kind = infiniterm_core::settings_schema::kind_of(key).unwrap_or(Kind::Text);
+        if key == COPY_KEY {
+            self.make_copy(&field.text);
+            return;
+        }
+        let kind = settings_schema::kind_of(key)
+            .or_else(|| settings_schema::theme_kind_of(key))
+            .unwrap_or(Kind::Text);
         let Some(i) = target.item else {
             match settings_rows::parse_field(kind, &field.text) {
-                Ok(value) => self.write(key, settings_rows::write_for(key, value)),
+                Ok(value) => self.set(key, value),
                 Err(why) => {
                     self.error = Some((key, format!("{key} should be {why}")));
                     self.editing = Some((target, field));
@@ -240,6 +364,37 @@ impl SettingsWindow {
         let list = self.list_of(key);
         let text = field.text.trim();
         let next = match (kind, target.part) {
+            // A gradient is two stops edited one at a time; both emptied is
+            // "off" (`[]`). The theme takes two stops or none, so a stop
+            // typed while the other is empty fills both (a flat colour) and
+            // the other cell then changes its end; one alone was refused
+            // and the typed stop lost (seen on screen).
+            (Kind::ColorPair, _) => {
+                let mut pair: Vec<Value> = list.clone();
+                pair.resize(2, Value::from(""));
+                pair[i.min(1)] = Value::from(text);
+                let empty = |v: &Value| v.as_str().unwrap_or("").is_empty();
+                match (empty(&pair[0]), empty(&pair[1])) {
+                    (true, true) => Value::Array(vec![]),
+                    (false, true) => Value::Array(vec![pair[0].clone(), pair[0].clone()]),
+                    (true, false) => Value::Array(vec![pair[1].clone(), pair[1].clone()]),
+                    (false, false) => Value::Array(pair),
+                }
+            }
+            (Kind::IconMap, _) if text.is_empty() => {
+                if i >= settings_rows::map_entries(&self.raw_of(key)).len() {
+                    return;
+                }
+                settings_rows::map_remove(&self.raw_of(key), i)
+            }
+            (Kind::IconMap, _) => match settings_rows::map_set(&self.raw_of(key), i, text) {
+                Ok(map) => map,
+                Err(why) => {
+                    self.error = Some((key, format!("an entry should be {why}")));
+                    self.editing = Some((target, field));
+                    return;
+                }
+            },
             (Kind::SearchEngines, Some(part)) => {
                 if i >= list.len() && text.is_empty() {
                     return;
@@ -262,7 +417,51 @@ impl SettingsWindow {
             },
             _ => settings_rows::list_set(&list, i, Value::from(field.text.clone())),
         };
-        self.write(key, settings_rows::write_for(key, next));
+        self.set(key, next);
+    }
+
+    fn open_theme_page(&mut self, cx: &mut Context<Self>) {
+        self.settle();
+        self.theme_page = true;
+        self.search = Field::default();
+        cx.notify();
+    }
+
+    fn toggle_name(&mut self, key: &'static str, name: &str, cx: &mut Context<Self>) {
+        self.settle();
+        let next = settings_rows::name_toggle(&self.list_of(key), name);
+        self.set(key, next);
+        cx.notify();
+    }
+
+    /// A picture for `ui.backgroundImage` from the system's file panel,
+    /// added at the end of the list.
+    fn add_picture(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        self.settle();
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Add".into()),
+        });
+        cx.spawn(async move |view, cx| {
+            let path = picked
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+                .and_then(|paths| paths.into_iter().next());
+            let Some(path) = path else { return };
+            let _ = view.update(cx, |this, cx| {
+                let list = this.list_of(key);
+                let path = Value::from(path.to_string_lossy().into_owned());
+                let next = settings_rows::list_set(&list, list.len(), path);
+                this.set(key, next);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// A click anywhere settles what was open first: a field commits (a
@@ -309,7 +508,7 @@ impl SettingsWindow {
 
     fn pick(&mut self, key: &'static str, item: String, cx: &mut Context<Self>) {
         self.picking = None;
-        self.write(key, settings_rows::write_for(key, Value::from(item)));
+        self.set(key, Value::from(item));
         cx.notify();
     }
 
@@ -332,7 +531,7 @@ impl SettingsWindow {
             let Some(path) = path else { return };
             let _ = view.update(cx, |this, cx| {
                 let path = path.to_string_lossy().into_owned();
-                this.write(key, settings_rows::write_for(key, Value::from(path)));
+                this.set(key, Value::from(path));
                 cx.notify();
             });
         })
@@ -353,14 +552,18 @@ impl SettingsWindow {
 
     fn remove_item(&mut self, key: &'static str, i: usize, cx: &mut Context<Self>) {
         self.settle();
-        let next = settings_rows::list_remove(&self.list_of(key), i);
-        self.write(key, settings_rows::write_for(key, next));
+        let next = if settings_schema::theme_kind_of(key) == Some(Kind::IconMap) {
+            settings_rows::map_remove(&self.raw_of(key), i)
+        } else {
+            settings_rows::list_remove(&self.list_of(key), i)
+        };
+        self.set(key, next);
         cx.notify();
     }
 
     fn click_check(&mut self, key: &'static str, on: bool, cx: &mut Context<Self>) {
         self.settle();
-        self.write(key, settings_rows::write_for(key, Value::Bool(!on)));
+        self.set(key, Value::Bool(!on));
         cx.notify();
     }
 
@@ -373,7 +576,7 @@ impl SettingsWindow {
 
     fn pick_choice(&mut self, key: &'static str, word: &'static str, cx: &mut Context<Self>) {
         self.choosing = None;
-        self.write(key, settings_rows::write_for(key, Value::from(word)));
+        self.set(key, Value::from(word));
         cx.notify();
     }
 
@@ -393,6 +596,7 @@ impl SettingsWindow {
     fn click_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.settle();
         self.section = section;
+        self.theme_page = false;
         self.search = Field::default();
         cx.notify();
     }
@@ -520,12 +724,29 @@ impl Render for SettingsWindow {
             )
         };
         let t = &chrome.typography;
-        let rows = settings_rows::rows(&self.text);
+        let rows = self.all_rows();
         let query = self.search.text.trim().to_string();
         let searching = !query.is_empty();
         // The search field has the keys when no field or picker does.
         let searching_keys = self.editing.is_none() && self.picking.is_none();
+        let theme_page = self.theme_page && !searching;
 
+        let menu_item = |title: &'static str, current: bool| {
+            div()
+                .px(px(8. * ui))
+                .py(px(5. * ui))
+                .rounded_md()
+                .cursor_pointer()
+                .when(current, |d| {
+                    d.bg(chrome.row_selected).text_color(chrome.text_bright)
+                })
+                .when(!current, |d| d.text_color(chrome.text_mid))
+                .child(title)
+        };
+        let theme_item = menu_item("UI Theme", theme_page).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _: &MouseDownEvent, _, cx| this.open_theme_page(cx)),
+        );
         let menu = Section::ALL.iter().fold(
             div()
                 .flex()
@@ -537,27 +758,19 @@ impl Render for SettingsWindow {
                 .border_r_1()
                 .border_color(chrome.bar_border),
             |menu, &section| {
-                let current = !searching && section == self.section;
-                menu.child(
-                    div()
-                        .px(px(8. * ui))
-                        .py(px(5. * ui))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .when(current, |d| {
-                            d.bg(chrome.row_selected).text_color(chrome.text_bright)
-                        })
-                        .when(!current, |d| d.text_color(chrome.text_mid))
-                        .child(section.title())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                this.click_section(section, cx)
-                            }),
-                        ),
-                )
+                let current = !searching && !theme_page && section == self.section;
+                menu.child(menu_item(section.title(), current).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.click_section(section, cx)
+                    }),
+                ))
             },
         );
+        // The ui theme's own page, apart from the settings sections (#745).
+        let menu = menu
+            .child(div().my(px(6. * ui)).h(px(1.)).bg(chrome.bar_border))
+            .child(theme_item);
 
         let search_box = div()
             .flex()
@@ -593,16 +806,29 @@ impl Render for SettingsWindow {
             .filter(|r| {
                 if searching {
                     settings_rows::matches(r, &query)
+                } else if theme_page {
+                    r.theme.is_some()
                 } else {
-                    r.section == self.section
+                    r.theme.is_none() && r.section == self.section
                 }
             })
             .collect();
         let mut list = div().flex().flex_col();
-        let mut last_section = None;
+        if theme_page {
+            list = list.child(self.render_theme_header(&chrome, &mono, ui, cx));
+        }
+        // A heading wherever the group changes: the section while searching,
+        // the theme's groups on its page and in a search.
+        let mut last_heading: Option<String> = None;
         for row in &shown {
-            if searching && last_section != Some(row.section) {
-                last_section = Some(row.section);
+            let heading = match row.theme {
+                Some(group) if searching => Some(format!("UI Theme \u{b7} {}", group.title())),
+                Some(group) => Some(group.title().to_string()),
+                None if searching => Some(row.section.title().to_string()),
+                None => None,
+            };
+            if heading.is_some() && heading != last_heading {
+                last_heading = heading.clone();
                 list = list.child(
                     div()
                         .pt(px(PAD_PX * ui))
@@ -610,7 +836,7 @@ impl Render for SettingsWindow {
                         .text_size(px(t.size(HEADER_FONT_PX) * ui))
                         .font_weight(t.bold.weight)
                         .text_color(chrome.text_muted)
-                        .child(row.section.title()),
+                        .children(heading),
                 );
             }
             list = list.child(self.render_row(row, &chrome, &mono, ui, cx));
@@ -697,6 +923,102 @@ impl Render for SettingsWindow {
 }
 
 impl SettingsWindow {
+    /// The top of the UI Theme page: which file it edits, and while the
+    /// built-in look is in force, a name and "Make a copy" (#745).
+    fn render_theme_header(
+        &self,
+        chrome: &Chrome,
+        mono: &str,
+        ui: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let t = &chrome.typography;
+        let file = format!("ui-themes/{}.json", self.theme_name);
+        let mut out = div()
+            .flex()
+            .flex_col()
+            .gap(px(6. * ui))
+            .pb(px(ROW_PAD_Y_PX * ui))
+            .border_b_1()
+            .border_color(chrome.bar_border)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(6. * ui))
+                    .text_color(chrome.text_mid)
+                    .child("Editing")
+                    .child(
+                        div()
+                            .font_family(mono.to_string())
+                            .text_size(px(t.size(KEY_MONO_FONT_PX) * ui))
+                            .text_color(chrome.text_bright)
+                            .child(file),
+                    )
+                    .child("(set by ui.theme). Unset keys use the built-in look."),
+            );
+        if self.theme_is_builtin() {
+            let target = Target::key(COPY_KEY);
+            let suggested = settings_rows::copy_name(&config_files::list_ui_themes());
+            out = out
+                .child(
+                    div()
+                        .text_color(chrome.text_muted)
+                        .child("This is the built-in look. Make a copy to change it: the copy becomes your ui.theme."),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(ROW_GAP_PX * ui))
+                        .child(
+                            div()
+                                .w(px(CONTROL_W_PX * ui))
+                                .flex()
+                                .child(self.cell(target, suggested.clone(), "name", chrome, ui, cx)),
+                        )
+                        .child(
+                            div()
+                                .px(px(10. * ui))
+                                .py(px(4. * ui))
+                                .rounded_md()
+                                .bg(chrome.sel_bg)
+                                .text_color(chrome.sel_fg)
+                                .cursor_pointer()
+                                .child("Make a copy")
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                        // The open field's name, else the
+                                        // suggested one shown in it.
+                                        let name = match this.editing.take() {
+                                            Some((t, f)) if t.key == COPY_KEY => f.text,
+                                            other => {
+                                                this.editing = other;
+                                                this.settle();
+                                                suggested.clone()
+                                            }
+                                        };
+                                        this.make_copy(&name);
+                                        cx.notify();
+                                    }),
+                                ),
+                        ),
+                );
+            if let Some((_, why)) = self.error.as_ref().filter(|(k, _)| *k == COPY_KEY) {
+                out = out.child(
+                    div()
+                        .text_size(px(t.size(SUMMARY_FONT_PX) * ui))
+                        .text_color(chrome.warn)
+                        .child(why.clone()),
+                );
+            }
+        }
+        out.into_any_element()
+    }
+
     fn render_row(
         &self,
         row: &Row,
@@ -867,14 +1189,107 @@ impl SettingsWindow {
                 .flex_row()
                 .justify_between()
                 .cursor_pointer()
-                .child(settings_rows::display(&row.value))
+                .child(match settings_rows::display(&row.value) {
+                    // A theme key the file does not set.
+                    s if s.is_empty() => div().text_color(chrome.text_faint).child("built-in"),
+                    s => div().child(s),
+                })
                 .child(div().text_color(chrome.text_muted).child("\u{25be}"))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| this.click_choice(key, cx)),
                 )
                 .into_any_element(),
-            Kind::Number | Kind::OptionalNumber | Kind::Text | Kind::Color => {
+            // Two stops, each its own cell; both emptied is "off".
+            Kind::ColorPair => {
+                let pair = row.list();
+                let stop = |i: usize| {
+                    pair.get(i)
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string()
+                };
+                div()
+                    .w(px(CONTROL_W_PX * ui))
+                    .flex()
+                    .flex_row()
+                    .gap(px(6. * ui))
+                    .children((0..2).map(|i| {
+                        let text = stop(i);
+                        let target = Target {
+                            key,
+                            item: Some(i),
+                            part: None,
+                        };
+                        let swatch = swatch_color(text.trim());
+                        self.cell(
+                            target,
+                            text,
+                            if i == 0 { "from" } else { "to" },
+                            chrome,
+                            ui,
+                            cx,
+                        )
+                        .children(swatch.map(|c| {
+                            div()
+                                .absolute()
+                                .right(px(4. * ui))
+                                .top(px(5. * ui))
+                                .size(px(SWATCH_PX * ui * 0.8))
+                                .rounded_sm()
+                                .bg(c)
+                        }))
+                        .relative()
+                    }))
+                    .into_any_element()
+            }
+            // The items are drawn under the row (`render_items`).
+            Kind::PathList | Kind::IconMap | Kind::NameList(_) => {
+                let count = if row.kind == Kind::IconMap {
+                    settings_rows::map_entries(row.raw.as_ref().unwrap_or(&row.value)).len()
+                } else {
+                    row.list().len()
+                };
+                let action: Option<(&'static str, bool)> = match row.kind {
+                    Kind::PathList => Some(("Add picture\u{2026}", true)),
+                    Kind::IconMap => Some(("Add", false)),
+                    _ => None,
+                };
+                div()
+                    .w(px(CONTROL_W_PX * ui))
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .child(div().text_color(chrome.text_muted).child(match count {
+                        0 if row.set => "none".to_string(),
+                        0 => "built-in".to_string(),
+                        1 => "1 item".to_string(),
+                        n => format!("{n} items"),
+                    }))
+                    .children(action.map(|(label, picture)| {
+                        div()
+                            .cursor_pointer()
+                            .text_color(chrome.focus_ring)
+                            .child(label)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    if picture {
+                                        this.add_picture(key, cx)
+                                    } else {
+                                        let target = Target {
+                                            key,
+                                            item: Some(count),
+                                            part: None,
+                                        };
+                                        this.click_item(target, String::new(), cx)
+                                    }
+                                }),
+                            )
+                    }))
+                    .into_any_element()
+            }
+            Kind::Number | Kind::OptionalNumber | Kind::Text | Kind::Color | Kind::ColorWord => {
                 let editing = self
                     .editing
                     .as_ref()
@@ -883,20 +1298,24 @@ impl SettingsWindow {
                     Some((_, f)) => f.text.clone(),
                     None => settings_rows::display(&row.value),
                 };
-                let swatch = (row.kind == Kind::Color)
+                let swatch = matches!(row.kind, Kind::Color | Kind::ColorWord)
                     .then(|| swatch_color(text.trim()))
                     .flatten();
                 let shown = match editing {
                     Some((_, f)) => {
                         f.inline_composing(chrome.sel_bg, chrome.sel_fg, self.composing.as_deref())
                     }
-                    None if text.is_empty() => div().text_color(chrome.text_faint).child(
-                        if row.kind == Kind::OptionalNumber {
-                            "unset"
-                        } else {
-                            "empty"
-                        },
-                    ),
+                    None if text.is_empty() => {
+                        div()
+                            .text_color(chrome.text_faint)
+                            .child(if row.theme.is_some() {
+                                "built-in"
+                            } else if row.kind == Kind::OptionalNumber {
+                                "unset"
+                            } else {
+                                "empty"
+                            })
+                    }
                     None => div().truncate().child(text),
                 };
                 let value = row.value.clone();
@@ -1076,7 +1495,18 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let key = row.key;
-        let list = row.list();
+        if let Kind::NameList(names) = row.kind {
+            return Some(self.render_names(row, names, chrome, ui, cx));
+        }
+        // An icon map's entries read as `program=icon`, one cell each.
+        let list: Vec<Value> = match row.kind {
+            Kind::TextList | Kind::NumberList | Kind::SearchEngines | Kind::PathList => row.list(),
+            Kind::IconMap => settings_rows::map_entries(row.raw.as_ref().unwrap_or(&row.value))
+                .into_iter()
+                .map(|(k, v)| Value::from(format!("{k}={v}")))
+                .collect(),
+            _ => return None,
+        };
         let adding = self
             .editing
             .as_ref()
@@ -1121,10 +1551,11 @@ impl SettingsWindow {
                     item: Some(i),
                     part: None,
                 };
-                let placeholder = if row.kind == Kind::NumberList {
-                    "column"
-                } else {
-                    "NAME=value"
+                let placeholder = match row.kind {
+                    Kind::NumberList => "column",
+                    Kind::PathList => "a picture's path",
+                    Kind::IconMap => "program=icon",
+                    _ => "NAME=value",
                 };
                 line = line.child(self.cell(
                     target,
@@ -1164,6 +1595,67 @@ impl SettingsWindow {
             }
         }
         Some(out.into_any_element())
+    }
+
+    /// A name list's checkboxes, one per name it may hold, in the fixed
+    /// order; a tick adds the name at the end, as the file lists them.
+    fn render_names(
+        &self,
+        row: &Row,
+        names: &'static [&'static str],
+        chrome: &Chrome,
+        ui: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let key = row.key;
+        let list = row.list();
+        names
+            .iter()
+            .fold(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(ROW_GAP_PX * ui))
+                    .pt(px(6. * ui))
+                    .pl(px((SET_DOT_PX + 6.) * ui)),
+                |out, &name| {
+                    let on = list.iter().any(|v| v.as_str() == Some(name));
+                    out.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6. * ui))
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .size(px(CHECK_PX * ui))
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(if on {
+                                        chrome.sel_bg
+                                    } else {
+                                        chrome.control_border
+                                    })
+                                    .bg(if on { chrome.sel_bg } else { chrome.control_bg })
+                                    .text_color(chrome.sel_fg)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .when(on, |d| d.child("\u{2713}")),
+                            )
+                            .child(name)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                    this.toggle_name(key, name, cx)
+                                }),
+                            ),
+                    )
+                },
+            )
+            .into_any_element()
     }
 
     /// The searchable list under a font or theme row: a filter field and

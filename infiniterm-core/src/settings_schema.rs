@@ -50,6 +50,136 @@ pub enum Kind {
     NumberList,
     /// `browser.engines`: a list of `{keyword, name, searchUrl}`.
     SearchEngines,
+    // The kinds below occur only in a ui theme (`THEME_SCHEMA`).
+    /// A colour (`#rgb`, `#rrggbb`, `#rrggbbaa`) or one of the theme's
+    /// words (`canvas`, `card`, `bar`, `transparent`, `none`, a colour
+    /// name for `ui.windowColor`); `ui_theme::parse` says which apply.
+    ColorWord,
+    /// Two gradient stops, or `[]` for none.
+    ColorPair,
+    /// One picture or a list of them (`ui.backgroundImage`).
+    PathList,
+    /// `tab.iconMap`: program name to a glyph or a logo file name.
+    IconMap,
+    /// A list of names from a fixed set, in order (`card.headerButtons`).
+    NameList(&'static [&'static str]),
+}
+
+/// The groups of the window's UI Theme page, in the order it shows them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ThemeGroup {
+    Window,
+    Background,
+    Cards,
+    CardHeader,
+    Text,
+    Bars,
+    Tabs,
+    CardTabs,
+}
+
+impl ThemeGroup {
+    pub fn title(self) -> &'static str {
+        match self {
+            ThemeGroup::Window => "Window",
+            ThemeGroup::Background => "Background picture",
+            ThemeGroup::Cards => "Cards",
+            ThemeGroup::CardHeader => "Card header",
+            ThemeGroup::Text => "Interface text",
+            ThemeGroup::Bars => "Title and status bars",
+            ThemeGroup::Tabs => "Workspace tabs",
+            ThemeGroup::CardTabs => "Card tabs",
+        }
+    }
+}
+
+/// The words `ui.backgroundImageFit` takes (`config::BackgroundFit`).
+const FITS: &[&str] = &["cover", "contain", "top-left", "actual-size", "tiled"];
+/// The words `tab.iconStyle` takes.
+const ICON_STYLES: &[&str] = &["glyph", "image"];
+
+/// Every ui theme key (`ui_theme::LOOK_KEYS` and `BAR_KEYS`), its kind and
+/// its group on the UI Theme page (#745). `every_theme_key_has_exactly_one_row`
+/// holds it to both tables.
+pub const THEME_SCHEMA: &[(&str, Kind, ThemeGroup)] = &[
+    (
+        "ui.icon",
+        Choice(&crate::app_icon::NAMES),
+        ThemeGroup::Window,
+    ),
+    ("ui.windowOpacity", Number, ThemeGroup::Window),
+    ("ui.windowBlur", Bool, ThemeGroup::Window),
+    ("ui.windowColor", ColorWord, ThemeGroup::Window),
+    ("canvas.background", Color, ThemeGroup::Window),
+    ("ui.showGrid", Bool, ThemeGroup::Window),
+    ("ui.backgroundImage", PathList, ThemeGroup::Background),
+    (
+        "ui.backgroundImageFit",
+        Choice(FITS),
+        ThemeGroup::Background,
+    ),
+    ("ui.backgroundImageInterval", Number, ThemeGroup::Background),
+    ("ui.backgroundImageFade", Number, ThemeGroup::Background),
+    ("ui.cardRadius", Number, ThemeGroup::Cards),
+    ("ui.cardOpacity", Number, ThemeGroup::Cards),
+    ("ui.cardGradient", ColorPair, ThemeGroup::Cards),
+    ("ui.cardGradientAngle", Number, ThemeGroup::Cards),
+    ("ui.focusRingWidth", Number, ThemeGroup::Cards),
+    ("ui.inactiveDim", Number, ThemeGroup::Cards),
+    ("ui.unfocusedDim", Number, ThemeGroup::Cards),
+    ("ui.hideLabelWhenFitted", Bool, ThemeGroup::Cards),
+    ("card.border", ColorWord, ThemeGroup::Cards),
+    ("card.borderOpacity", Number, ThemeGroup::Cards),
+    ("card.activeBorder", ColorWord, ThemeGroup::Cards),
+    ("card.activeBorderOpacity", Number, ThemeGroup::Cards),
+    ("card.header", Bool, ThemeGroup::CardHeader),
+    (
+        "card.headerButtons",
+        NameList(&crate::card_header::HeaderButton::NAMES),
+        ThemeGroup::CardHeader,
+    ),
+    ("card.headerButtonsActiveOnly", Bool, ThemeGroup::CardHeader),
+    ("card.headerIcons", Bool, ThemeGroup::CardHeader),
+    ("card.headerIconSize", Number, ThemeGroup::CardHeader),
+    ("ui.fontFamily", Font, ThemeGroup::Text),
+    ("ui.fontSize", Number, ThemeGroup::Text),
+    ("ui.fontWeight", Text, ThemeGroup::Text),
+    ("ui.fontWeightBold", Text, ThemeGroup::Text),
+    ("titlebar.background", ColorWord, ThemeGroup::Bars),
+    ("titlebar.border", ColorWord, ThemeGroup::Bars),
+    ("statusbar.background", ColorWord, ThemeGroup::Bars),
+    ("statusbar.border", ColorWord, ThemeGroup::Bars),
+    ("tab.background", ColorWord, ThemeGroup::Tabs),
+    ("tab.activeBackground", ColorWord, ThemeGroup::Tabs),
+    ("tab.gradient", ColorPair, ThemeGroup::Tabs),
+    ("tab.opacity", Number, ThemeGroup::Tabs),
+    ("tab.border", ColorWord, ThemeGroup::Tabs),
+    ("tab.activeBorder", ColorWord, ThemeGroup::Tabs),
+    ("tab.separator", ColorWord, ThemeGroup::Tabs),
+    ("tab.radius", Number, ThemeGroup::Tabs),
+    ("tab.paddingX", Number, ThemeGroup::Tabs),
+    ("tab.icons", Bool, ThemeGroup::Tabs),
+    ("tab.iconStyle", Choice(ICON_STYLES), ThemeGroup::Tabs),
+    ("tab.iconMap", IconMap, ThemeGroup::Tabs),
+    ("tab.iconSize", Number, ThemeGroup::Tabs),
+    ("cardTab.background", ColorWord, ThemeGroup::CardTabs),
+    ("cardTab.activeBackground", ColorWord, ThemeGroup::CardTabs),
+    ("cardTab.gradient", ColorPair, ThemeGroup::CardTabs),
+    ("cardTab.opacity", Number, ThemeGroup::CardTabs),
+    ("cardTab.border", ColorWord, ThemeGroup::CardTabs),
+    ("cardTab.activeBorder", ColorWord, ThemeGroup::CardTabs),
+    ("cardTab.separator", ColorWord, ThemeGroup::CardTabs),
+    ("cardTab.radius", Number, ThemeGroup::CardTabs),
+    ("cardTab.paddingX", Number, ThemeGroup::CardTabs),
+    ("cardTab.hoverDetail", Bool, ThemeGroup::CardTabs),
+];
+
+/// The kind of a ui theme key.
+pub fn theme_kind_of(key: &str) -> Option<Kind> {
+    THEME_SCHEMA
+        .iter()
+        .find(|(k, _, _)| *k == key)
+        .map(|(_, kind, _)| *kind)
 }
 
 /// The window's left menu, in the order it lists them.
@@ -331,6 +461,8 @@ mod tests {
                     .as_array()
                     .is_some_and(|a| a.iter().all(Value::is_number)),
                 SearchEngines => default.is_array(),
+                // Theme-only kinds have no business on a settings key.
+                ColorWord | ColorPair | PathList | IconMap | NameList(_) => false,
             };
             assert!(ok, "{key} is {kind:?} but defaults to {default}");
         }
@@ -389,5 +521,71 @@ mod tests {
             "a ui theme key, not a settings key"
         );
         assert_eq!(kind_of("nope"), None);
+    }
+
+    fn theme_keys() -> Vec<&'static str> {
+        crate::ui_theme::LOOK_KEYS
+            .iter()
+            .map(|(k, _)| *k)
+            .chain(crate::ui_theme::BAR_KEYS.iter().map(|(k, _, _)| *k))
+            .collect()
+    }
+
+    #[test]
+    fn every_theme_key_has_exactly_one_row() {
+        let keys = theme_keys();
+        for key in &keys {
+            let rows = THEME_SCHEMA.iter().filter(|(k, _, _)| k == key).count();
+            assert_eq!(rows, 1, "{key} has {rows} theme rows");
+        }
+        for (key, _, _) in THEME_SCHEMA {
+            assert!(
+                keys.contains(key),
+                "a theme row for a key no theme takes: {key}"
+            );
+            assert_eq!(
+                kind_of(key),
+                None,
+                "{key} is a theme key and a settings key"
+            );
+        }
+    }
+
+    /// A key's example (bar keys) or built-in value (look keys) has the
+    /// shape its kind draws, and the theme parser takes it.
+    #[test]
+    fn each_theme_kind_matches_its_example() {
+        let ui = serde_json::to_value(default_config().ui).unwrap();
+        for (key, kind, _) in THEME_SCHEMA {
+            let example: Value = match crate::ui_theme::BAR_KEYS.iter().find(|(k, _, _)| k == key) {
+                Some((_, _, text)) => serde_json::from_str(text).unwrap(),
+                None => ui[key.strip_prefix("ui.").unwrap()].clone(),
+            };
+            let ok = match kind {
+                Bool => example.is_boolean(),
+                Number => example.is_number(),
+                Text | Font | ColorWord => example.is_string(),
+                Color => example
+                    .as_str()
+                    .is_some_and(crate::ui_theme::is_gradient_stop),
+                Choice(words) => example.as_str().is_some_and(|s| words.contains(&s)),
+                ColorPair => example
+                    .as_array()
+                    .is_some_and(|a| a.is_empty() || a.len() == 2),
+                PathList => example.is_string() || example.is_array(),
+                IconMap => example.is_object(),
+                NameList(names) => example.as_array().is_some_and(|a| {
+                    a.iter()
+                        .all(|n| n.as_str().is_some_and(|s| names.contains(&s)))
+                }),
+                other => panic!("{key}: {other:?} is not a theme kind"),
+            };
+            assert!(ok, "{key} is {kind:?} but its example is {example}");
+            let text = json!({ *key: example }).to_string();
+            assert!(
+                crate::ui_theme::parse(&text).is_ok(),
+                "{key}: {example} is refused"
+            );
+        }
     }
 }
