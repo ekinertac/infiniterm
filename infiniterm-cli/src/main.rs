@@ -107,7 +107,12 @@ ift — drive infiniterm from a shell
                              a Linux host (this version's package, sent over
                              ssh; --from <file> uses a file, --platform
                              linux-x86_64|linux-aarch64 skips asking the
-                             host). Settings start with the defaults.
+                             host). For a user other than root it also
+                             appends one line to ~/.profile (and to
+                             ~/.bash_profile or ~/.zprofile if they exist)
+                             that puts ~/.local/bin on the PATH; a file that
+                             already names it or is a symlink is left alone.
+                             Settings start with the defaults.
   ift workspaces             workspaces left to right: id, name, cards, and *
                              on the one on screen; a table on a terminal,
                              tab separated without a header into a pipe
