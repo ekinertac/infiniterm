@@ -270,15 +270,13 @@ impl Model {
     }
 
     /// The answered half of `workspace.saveAs` (#715): workspace `id` goes
-    /// to a file under `name`, over one already saved under it. `agents`
-    /// keeps the agent sessions (#852) even with
-    /// `cards.savedWorkspaceKeepsAgentSessions` off.
-    pub fn save_workspace_as(&mut self, id: &str, name: &str, agents: bool) {
+    /// to a file under `name`, over one already saved under it.
+    pub fn save_workspace_as(&mut self, id: &str, name: &str) {
         let Some(stem) = crate::saved_workspace::file_stem(name) else {
             self.notify("a saved workspace needs a name");
             return;
         };
-        let Some(text) = self.workspace_snapshot_text(id, &stem, agents) else {
+        let Some(text) = self.workspace_snapshot_text(id, &stem) else {
             return;
         };
         self.notify(format!("saved workspace \"{stem}\""));
@@ -386,6 +384,8 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // terminal's directory, each editor's files, each browser's page. The
     // field starts on the workspace's own name, so Enter saves under it, and
     // again later saves over it, after a question (`ReplaceSavedWorkspace`).
+    // `cards.savedWorkspaceKeepsAgentSessions` decides whether each card's
+    // agent session comes along (#852, #856).
     r.register("workspace.saveAs", "Workspace: save as…", |m| {
         let Some(ws) = m.active_ws().cloned() else {
             return;
@@ -393,31 +393,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.prompt.ask(
             "save workspace as",
             &ws.name,
-            Pending::SaveWorkspaceAs {
-                id: ws.id,
-                agents: false,
-            },
+            Pending::SaveWorkspaceAs(ws.id),
         );
     });
-    // The same, keeping each card's agent session (#852): a card opened from
-    // it offers `claude --resume <id>` (or its agent's own) on Up.
-    r.register(
-        "workspace.saveAsWithAgents",
-        "Workspace: save as, with agent sessions…",
-        |m| {
-            let Some(ws) = m.active_ws().cloned() else {
-                return;
-            };
-            m.prompt.ask(
-                "save workspace with agent sessions as",
-                &ws.name,
-                Pending::SaveWorkspaceAs {
-                    id: ws.id,
-                    agents: true,
-                },
-            );
-        },
-    );
     // Always a new workspace: opening one twice gives two.
     r.register("workspace.openSaved", "Workspace: open saved…", |m| {
         m.effects.push(Effect::RefreshSavedWorkspaces);

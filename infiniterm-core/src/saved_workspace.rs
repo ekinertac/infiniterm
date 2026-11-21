@@ -10,8 +10,7 @@
 //! A snapshot can outlive all of them, so an opened card is a fresh shell in
 //! the saved directory, numbered like any new card.
 //!
-//! The agent session is kept when asked for (#852): by
-//! `workspace.saveAsWithAgents`, or on every save with
+//! The agent session is kept when asked for (#852): on every save with
 //! `cards.savedWorkspaceKeepsAgentSessions`. The opened card is still a fresh
 //! shell; it offers the agent's resume command (`Card::offer_resume`), as a
 //! card whose session died with the machine does, and runs nothing itself.

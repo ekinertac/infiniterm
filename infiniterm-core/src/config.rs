@@ -259,8 +259,7 @@ pub struct Cards {
     pub new_card_inherits_directory: bool,
     /// Whether every saved workspace keeps its cards' agent sessions, so a
     /// card opened from it offers the resume command (#852). Read when
-    /// saving: the file records the choice. `workspace.saveAsWithAgents`
-    /// keeps them for one save with this off.
+    /// saving: the file records the choice.
     pub saved_workspace_keeps_agent_sessions: bool,
     /// The space between cards, in pixels (`cards.gap`). Every placement,
     /// split, tidy and growth works from it; 25 is the grid.
