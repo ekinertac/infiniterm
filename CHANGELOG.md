@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-22
+
+- New setting `terminal.linkPrefixes`: hyperlinks a program prints to another app's links become clickable when they start with one of these, e.g. `["obsidian://open"]` makes links to Obsidian notes open in Obsidian on Cmd+click. The prefix decides how much is allowed: `obsidian://open` opens notes only, while `obsidian://` would allow every Obsidian action. Web addresses stay links as before, `file:` and `javascript:` links never are, and the default (empty) changes nothing.
+
 ## 0.6.18 (build 1806), 2026-11-22
 
 ### 2026-11-21

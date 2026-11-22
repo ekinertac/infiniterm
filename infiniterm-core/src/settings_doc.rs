@@ -125,6 +125,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "terminal.linkPrefixes",
+        &[
+            "App links a program's hyperlinks may open, by how they start, e.g.",
+            "[\"obsidian://open\"] opens Obsidian notes from a link and nothing else Obsidian",
+            "does. Web addresses are always links; file: and javascript: never are. Cmd+click",
+            "hands one to its app. Empty, the default, keeps only web addresses.",
+        ],
+    ),
+    (
         "terminal.scrollMultiplier",
         &["Scroll speed: lines per wheel step, times this. 0.1 to 10."],
     ),

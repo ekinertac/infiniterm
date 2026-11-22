@@ -155,6 +155,10 @@ pub struct Terminal {
     /// to the system browser and Cmd+Shift+click to a browser card. Off keeps
     /// the card on Cmd+click.
     pub reverse_link_click: bool,
+    /// Starts of app links (`obsidian://open`) that an OSC 8 hyperlink may
+    /// carry and still be clickable (#871). Empty, the default, keeps only
+    /// web addresses; `links::link_allowed` is the check.
+    pub link_prefixes: Vec<String>,
     /// Lines per wheel step, as a multiple of the normal rate.
     pub scroll_multiplier: f64,
     /// Space between a card's edge and its text, in points at 100%.
@@ -636,6 +640,7 @@ pub fn default_config() -> Config {
             session_buffer: 4.,
             copy_on_select: false,
             reverse_link_click: false,
+            link_prefixes: vec![],
             scroll_multiplier: 1.,
             // The inset cards have had since the first day
             // (terminal_body.rs `PAD`).
@@ -998,6 +1003,7 @@ pub fn merge_config(raw: &Value) -> Config {
             },
             copy_on_select: bool_(t.get("copyOnSelect"), d.terminal.copy_on_select),
             reverse_link_click: bool_(t.get("reverseLinkClick"), d.terminal.reverse_link_click),
+            link_prefixes: string_or_list(t.get("linkPrefixes")),
             scroll_multiplier: num(
                 t.get("scrollMultiplier"),
                 d.terminal.scroll_multiplier,
@@ -1381,6 +1387,18 @@ mod tests {
     }
 
     // Off keeps Cmd+click on a URL opening a browser card (#662).
+    #[test]
+    fn link_prefixes_are_empty_unless_set() {
+        assert!(default_config().terminal.link_prefixes.is_empty());
+        let c = merge_config(&serde_json::json!({
+            "terminal.linkPrefixes": ["obsidian://open", "", 7, " vscode://file "]
+        }));
+        assert_eq!(
+            c.terminal.link_prefixes,
+            ["obsidian://open", "vscode://file"]
+        );
+    }
+
     #[test]
     fn reverse_link_click_is_off_unless_set() {
         assert!(!default_config().terminal.reverse_link_click);

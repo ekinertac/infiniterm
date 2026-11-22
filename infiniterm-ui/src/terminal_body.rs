@@ -192,6 +192,9 @@ pub struct TerminalBody {
     /// checked against this Mac's disk (that found nothing and dropped the
     /// click); every path-like text is a link and a click asks the host.
     pub remote_paths: bool,
+    /// `terminal.linkPrefixes` (#871): the app links an OSC 8 hyperlink may
+    /// be. A change rescans the rows as they are next rebuilt.
+    link_prefixes: Vec<String>,
     /// Each row shaped ONCE, keyed by what it was shaped from, so a row
     /// that did not change is not shaped again. htop repaints every second;
     /// the other 39 rows of the other 24 cards do not.
@@ -367,6 +370,7 @@ impl TerminalBody {
             cols,
             fixed_cells: None,
             remote_paths: false,
+            link_prefixes: vec![],
             rows,
             shaped: vec![],
         }
@@ -631,10 +635,21 @@ impl TerminalBody {
                     repo.as_ref(),
                     &row.hyperlinks,
                     self.remote_paths,
+                    &self.link_prefixes,
                 )
             } else {
                 vec![]
             };
+        }
+    }
+
+    /// Takes `terminal.linkPrefixes`. Rows are rescanned only when their text
+    /// changes, so a new list also forgets what was scanned: each row is read
+    /// with it the next time it is rebuilt.
+    pub fn set_link_prefixes(&mut self, prefixes: &[String]) {
+        if self.link_prefixes != prefixes {
+            self.link_prefixes = prefixes.to_vec();
+            self.link_texts.clear();
         }
     }
 
@@ -644,10 +659,11 @@ impl TerminalBody {
         repo: Option<&Repo>,
         spans: &[(usize, usize, String)],
         remote_paths: bool,
+        link_prefixes: &[String],
     ) -> Vec<(Found, Option<PathKind>)> {
         {
             {
-                let found = merge_hyperlinks(find_links_in(line, repo), line, spans);
+                let found = merge_hyperlinks(find_links_in(line, repo), line, spans, link_prefixes);
                 // The paths are on another machine: nothing here can say
                 // whether they exist, so each is a link and the host decides
                 // when it is clicked (#555).
@@ -2112,12 +2128,12 @@ mod tests {
     #[test]
     fn in_a_joined_terminal_a_path_is_a_link_without_a_look_at_this_disk() {
         let line = "edited /no/such/dir/on/this/mac/disk.rs:42 just now";
-        let here = TerminalBody::scan_links(line, "/", None, &[], false);
+        let here = TerminalBody::scan_links(line, "/", None, &[], false, &[]);
         assert!(
             here.iter().all(|(f, _)| f.kind != LinkKind::Path),
             "a path that is not on this disk is no link in a local terminal"
         );
-        let joined = TerminalBody::scan_links(line, "/", None, &[], true);
+        let joined = TerminalBody::scan_links(line, "/", None, &[], true, &[]);
         let paths: Vec<_> = joined
             .iter()
             .filter(|(f, _)| f.kind == LinkKind::Path)
@@ -2127,7 +2143,8 @@ mod tests {
         assert_eq!(paths[0].0.line, Some(42));
         assert!(paths[0].1.is_some(), "clickable");
         // An address is still an address.
-        let url = TerminalBody::scan_links("see https://infiniterm.app/x", "/", None, &[], true);
+        let url =
+            TerminalBody::scan_links("see https://infiniterm.app/x", "/", None, &[], true, &[]);
         assert!(url
             .iter()
             .any(|(f, k)| f.kind == LinkKind::Url && k.is_none()));

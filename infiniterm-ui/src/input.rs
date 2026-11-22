@@ -1528,7 +1528,17 @@ impl AppView {
             }
             crate::body::BodyAction::OpenLink { url, cwd, shift } => {
                 let reverse = self.model.config.terminal.reverse_link_click;
-                if infiniterm_core::ift::link_in_card(shift, reverse) {
+                // An app link the person listed in `terminal.linkPrefixes`
+                // (#871): no browser card shows it, so it goes to its app,
+                // and the list was the yes the #668 prompt would ask for.
+                if !infiniterm_core::links::is_web(&url) {
+                    if let Err(e) = infiniterm_core::links_fs::open_app_link(&url) {
+                        let scheme = infiniterm_core::app_link::scheme(&url).unwrap_or_default();
+                        self.model
+                            .notify(format!("no app on this Mac opens {scheme} links"));
+                        eprintln!("[infiniterm] {url}: {e}");
+                    }
+                } else if infiniterm_core::ift::link_in_card(shift, reverse) {
                     self.model
                         .open_in_card(infiniterm_core::ift::url_plan(&url, &cwd), Some(id));
                 } else if let Err(e) = infiniterm_core::links_fs::open_url(&url) {
