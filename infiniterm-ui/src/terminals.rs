@@ -248,6 +248,7 @@ impl AppView {
         let blink = self.model.config.terminal.cursor_blink;
         let inactive_dim = self.model.config.ui.inactive_dim;
         let copy_on_select = self.model.config.terminal.copy_on_select;
+        let link_prefixes = self.model.config.terminal.link_prefixes.clone();
         let scroll_multiplier = self.model.config.terminal.scroll_multiplier;
         let padding = self.model.config.terminal.padding;
         let extra_env: Vec<(String, String)> = self
@@ -333,6 +334,7 @@ impl AppView {
             body.blink = blink;
             body.inactive_dim = inactive_dim;
             body.copy_on_select = copy_on_select;
+            body.set_link_prefixes(&link_prefixes);
             body.scroll_multiplier = scroll_multiplier;
             // A padding change refits the grid through `refit_to` below.
             body.pad = padding;

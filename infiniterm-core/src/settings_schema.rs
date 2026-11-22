@@ -274,6 +274,7 @@ pub const SETTINGS_SCHEMA: &[(&str, Kind, Section)] = &[
     ("terminal.decoyCommand", Text, Terminal),
     ("terminal.copyOnSelect", Bool, Terminal),
     ("terminal.reverseLinkClick", Bool, Terminal),
+    ("terminal.linkPrefixes", TextList, Terminal),
     ("terminal.scrollMultiplier", Number, Terminal),
     ("terminal.padding", Number, Terminal),
     ("terminal.env", TextList, Terminal),

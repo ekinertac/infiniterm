@@ -188,23 +188,48 @@ pub fn find_links_in(line: &str, repo: Option<&crate::git_repo::Repo>) -> Vec<Fo
     found
 }
 
+/// Whether `uri` is a web address, the only kind a browser card opens.
+pub fn is_web(uri: &str) -> bool {
+    let lower = uri.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// Whether an OSC 8 address may be a link (#871): a web address always; an
+/// app's own link (`obsidian://open?...`, see `app_link`) only when it starts
+/// with one of `prefixes`, the person's `terminal.linkPrefixes`, compared
+/// without case. `file:` and the other schemes `app_link` refuses never pass,
+/// whatever the list says, so a prefix cannot make a click run a file.
+pub fn link_allowed(uri: &str, prefixes: &[String]) -> bool {
+    if is_web(uri) {
+        return true;
+    }
+    let lower = uri.to_ascii_lowercase();
+    crate::app_link::is_app_link(uri)
+        && prefixes
+            .iter()
+            .any(|p| !p.is_empty() && lower.starts_with(&p.to_ascii_lowercase()))
+}
+
 /// `found` plus the OSC 8 hyperlinks of the row (`spans`: start column, end
 /// column not included, address), the program's own word for where a link is.
-/// A span wins over anything it overlaps. Only web addresses are offered:
-/// the text of a link is whatever the program printed, and a Cmd+click must
-/// not run `file:` or an application's own scheme. `line` has one character
-/// per column, as the terminal's rows do.
+/// A span wins over anything it overlaps. Only web addresses are offered,
+/// plus the app links `prefixes` lets through (`link_allowed`): the text of a
+/// link is whatever the program printed, and a Cmd+click must not run `file:`
+/// or an application's own scheme the person did not choose. `line` has one
+/// character per column, as the terminal's rows do.
 pub fn merge_hyperlinks(
     mut found: Vec<Found>,
     line: &str,
     spans: &[(usize, usize, String)],
+    prefixes: &[String],
 ) -> Vec<Found> {
     let byte_of = |col: usize| line.char_indices().nth(col).map_or(line.len(), |(i, _)| i);
     let mut linked = vec![];
     for (start, end, uri) in spans {
-        let lower = uri.to_ascii_lowercase();
-        let web = lower.starts_with("http://") || lower.starts_with("https://");
-        if !web || uri.len() > 2048 || uri.chars().any(|c| c.is_control() || c == ' ') {
+        if !link_allowed(uri, prefixes)
+            || uri.len() > 2048
+            || uri.chars().any(|c| c.is_control() || c == ' ')
+        {
             continue;
         }
         let (s, e) = (byte_of(*start), byte_of(*end));
@@ -518,7 +543,7 @@ mod tests {
     fn an_osc8_span_becomes_a_link_over_whatever_the_text_says() {
         let line = "see issue 432 now";
         let spans = vec![(4, 13, "https://github.com/o/r/issues/432".to_string())];
-        let found = merge_hyperlinks(find_links(line), line, &spans);
+        let found = merge_hyperlinks(find_links(line), line, &spans, &[]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].text, "issue 432");
         assert!(found[0].marked);
@@ -528,7 +553,7 @@ mod tests {
         // A span over text that already read as a link replaces it.
         let line = "go to github.com/a/b please";
         let spans = vec![(6, 20, "https://example.org/x".to_string())];
-        let found = merge_hyperlinks(find_links(line), line, &spans);
+        let found = merge_hyperlinks(find_links(line), line, &spans, &[]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].target, "https://example.org/x");
     }
@@ -545,19 +570,48 @@ mod tests {
         ] {
             let spans = vec![(3, 7, bad.to_string())];
             assert!(
-                merge_hyperlinks(vec![], line, &spans).is_empty(),
+                merge_hyperlinks(vec![], line, &spans, &[]).is_empty(),
                 "{bad} must not be a link"
             );
         }
         // Two wide characters then a space: the span starts at column 3.
         let spans = vec![(3, 7, "HTTP://example.com".to_string())];
-        let found = merge_hyperlinks(vec![], line, &spans);
+        let found = merge_hyperlinks(vec![], line, &spans, &[]);
         assert_eq!(found[0].text, "link");
         // No spans: the links are returned untouched.
         let plain = find_links("https://example.com");
         assert_eq!(
-            merge_hyperlinks(plain.clone(), "https://example.com", &[]),
+            merge_hyperlinks(plain.clone(), "https://example.com", &[], &[]),
             plain
         );
+    }
+
+    #[test]
+    fn an_app_link_is_a_link_only_under_a_chosen_prefix() {
+        let line = "my note";
+        let note = "obsidian://open?vault=Notes&file=Inbox";
+        let spans = vec![(0, 7, note.to_string())];
+        // No prefixes, the default: not a link, as before.
+        assert!(merge_hyperlinks(vec![], line, &spans, &[]).is_empty());
+        let prefixes = vec!["Obsidian://open".to_string()];
+        let found = merge_hyperlinks(vec![], line, &spans, &prefixes);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, note);
+        assert_eq!(found[0].text, "my note");
+        // Another action of the same app is outside the prefix.
+        let other = vec![(0, 7, "obsidian://advanced-uri?commandid=x".to_string())];
+        assert!(merge_hyperlinks(vec![], line, &other, &prefixes).is_empty());
+        // An empty entry allows nothing.
+        assert!(!link_allowed(note, &["".to_string()]));
+    }
+
+    #[test]
+    fn a_prefix_never_lets_a_file_or_script_through() {
+        let everything = vec!["file:".to_string(), "javascript:".to_string()];
+        assert!(!link_allowed("file:///etc/passwd", &everything));
+        assert!(!link_allowed("javascript:alert(1)", &everything));
+        assert!(link_allowed("https://example.com", &[]));
+        assert!(is_web("HTTPS://example.com"));
+        assert!(!is_web("obsidian://open"));
     }
 }
