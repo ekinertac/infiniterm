@@ -213,6 +213,18 @@ impl Card {
     pub fn runs_agent(&self) -> bool {
         self.transcript_path.is_some() || self.agent_session.is_some()
     }
+
+    /// A terminal card whose shell the ui has not started yet: no pane, no
+    /// error from a failed start, not taken by `ift attach`. The ui starts
+    /// it in `reconcile_terminals`, which the frame runs; a minimised window
+    /// draws no frames, so the poll asks this to run it there too, or a card
+    /// made by `ift` or the phone waits for the window to come back.
+    pub fn awaits_shell(&self) -> bool {
+        self.kind == CardKind::Terminal
+            && self.pane_id.is_none()
+            && self.error.is_none()
+            && !self.displaced
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2212,5 +2224,27 @@ mod tests {
         assert_eq!(card.active_tab, 0);
         assert!(card.closed_tabs.is_empty());
         assert!(!card.locked);
+    }
+
+    #[test]
+    fn a_terminal_awaits_its_shell_until_it_has_a_pane_or_an_error() {
+        let mut m = Model::new();
+        m.home = "/h".into();
+        m.start_dir = "/h".into();
+        let id = m.add_card("/h", NewCard::default());
+        assert_eq!(m.card(&id).unwrap().kind, CardKind::Terminal);
+        assert!(m.card(&id).unwrap().awaits_shell());
+        m.card_mut(&id).unwrap().pane_id = Some(1);
+        assert!(!m.card(&id).unwrap().awaits_shell());
+        let c = m.card_mut(&id).unwrap();
+        c.pane_id = None;
+        c.error = Some("no shell".into());
+        assert!(!c.awaits_shell());
+        c.error = None;
+        c.displaced = true;
+        assert!(!c.awaits_shell());
+        c.displaced = false;
+        c.kind = CardKind::Editor;
+        assert!(!c.awaits_shell());
     }
 }

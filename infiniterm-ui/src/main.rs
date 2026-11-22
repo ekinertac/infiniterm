@@ -810,9 +810,9 @@ fn main() {
                 // timer is what stands in for it; it costs nothing when
                 // nothing arrived.
                 let poll = view.clone();
-                // The main window, for the one thing the poll does that needs
-                // a `Window`: the full screen toggle on Windows.
-                #[cfg(windows)]
+                // The main window, for the things the poll does that need a
+                // `Window`: the full screen toggle on Windows, and starting
+                // the shell of a card made while the window is minimised.
                 let main_window = window.window_handle();
                 cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
                     cx.background_executor()
@@ -907,6 +907,29 @@ fn main() {
                             cx.notify();
                         }
                     });
+                    // A shell starts in the frame (`reconcile_terminals`), and
+                    // a minimised window draws no frames: a card made by `ift`
+                    // or the phone meanwhile had no shell and no session until
+                    // the window came back, so the phone said "starting on the
+                    // Mac". The poll starts it instead; through the window
+                    // handle, which works while the window is not drawing.
+                    // A viewer's cards are started by the host
+                    // (`drive_viewer_links` above).
+                    let start = poll
+                        .update(cx, |this, _| {
+                            this.sync_sessions();
+                            !this.viewer && this.model.cards.iter().any(|c| c.awaits_shell())
+                        })
+                        .unwrap_or(false);
+                    if start {
+                        let app = poll.clone();
+                        let _ = main_window.update(cx, |_, window, cx| {
+                            app.update(cx, |this, cx| {
+                                this.reconcile_terminals(window);
+                                cx.notify();
+                            });
+                        });
+                    }
                     // Extraction (#356 spike). Opened here, after the update
                     // above has returned, so no second window touches the
                     // app while it is borrowed.
