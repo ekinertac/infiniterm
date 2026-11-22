@@ -611,18 +611,6 @@ impl AppView {
             // The title the program set through the terminal. Kept apart
             // from `card.title`, which is a name somebody chose; the label
             // uses this only while an agent is in the card.
-            // What the backend calls this card's session, learned a frame or
-            // two after the card was made. Saved, so the next launch can
-            // find it.
-            if let Some(pane) = card.pane_id {
-                let session = self.backend.pty.session_id(pane);
-                if session.is_some() && card.session != session {
-                    if let Some(c) = self.model.card_mut(&card.id) {
-                        c.session = session;
-                        self.model.dirty_layout = true;
-                    }
-                }
-            }
             // Mirrored so a relaunch can seed it back; see `assume_kitty_keys`.
             let kitty = body.kitty_keys();
             if card.kitty_keys != kitty {
@@ -642,6 +630,31 @@ impl AppView {
                 }
                 // The label was drawn before this ran.
                 self.redraw = true;
+            }
+        }
+        self.sync_sessions();
+    }
+
+    /// What the backend calls each terminal card's session, learned a frame
+    /// or two after the card was made. Saved, so the next launch can find
+    /// it, and sent to the phone, which shows "starting on the Mac" until it
+    /// is there. Needs no window: the poll runs it too, for a minimised
+    /// window that draws no frames.
+    pub fn sync_sessions(&mut self) {
+        let learned: Vec<(String, String)> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Terminal)
+            .filter_map(|c| {
+                let session = self.backend.pty.session_id(c.pane_id?)?;
+                (c.session.as_deref() != Some(session.as_str())).then(|| (c.id.clone(), session))
+            })
+            .collect();
+        for (id, session) in learned {
+            if let Some(c) = self.model.card_mut(&id) {
+                c.session = Some(session);
+                self.model.dirty_layout = true;
             }
         }
     }
