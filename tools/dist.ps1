@@ -53,7 +53,10 @@ $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select
 $build = (git rev-list --count HEAD).Trim()
 $commit = (git rev-parse --short HEAD).Trim()
 $name = "infiniterm-$version-$build-x86_64"
-$tag = "v$version-$build"
+# The release's own tag, `v<version>` like the Mac's (tools/dist.sh): the
+# Windows zip is attached to the same GitHub release, and a url under a tag
+# that does not exist would break the updater the day its key is set.
+$tag = "v$version"
 
 # Stamped into the binary: Windows has no bundle to read it back out of.
 # `cargo clean -p` on the one crate that reads it, because `option_env!` is
