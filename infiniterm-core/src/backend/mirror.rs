@@ -72,6 +72,9 @@ pub struct Mirror {
     touched: bool,
     /// When `rest` first saw nothing new.
     quiet_since: Instant,
+    /// `rest` has asked since the last touch: a refused history is not
+    /// walked again every few seconds.
+    asked: bool,
 }
 
 impl Mirror {
@@ -86,6 +89,7 @@ impl Mirror {
             cold: ColdHistory::default(),
             touched: true,
             quiet_since: Instant::now(),
+            asked: false,
         }
     }
 
@@ -100,10 +104,14 @@ impl Mirror {
     pub fn rest(&mut self, now: Instant) -> bool {
         if std::mem::take(&mut self.touched) {
             self.quiet_since = now;
+            self.asked = false;
             return false;
         }
-        now.duration_since(self.quiet_since) >= MIRROR_QUIET
-            && self.cold.cool(&mut self.term, MIRROR_HISTORY)
+        if self.asked || now.duration_since(self.quiet_since) < MIRROR_QUIET {
+            return false;
+        }
+        self.asked = true;
+        self.cold.cool(&mut self.term, MIRROR_HISTORY)
     }
 
     pub fn advance(&mut self, bytes: &[u8]) {
