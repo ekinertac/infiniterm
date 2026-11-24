@@ -3396,7 +3396,7 @@ mod tests {
     fn opening_settings_selects_only_the_users_file() {
         let mut h = Harness::new();
         four_cards(&mut h);
-        h.run("app.settings");
+        h.run("app.settings.file");
         let focused = h.m.focused().cloned().expect("a focused card");
         assert!(focused
             .path
@@ -3407,14 +3407,14 @@ mod tests {
         assert_eq!(h.m.config_pairs.len(), 1, "the pair is still remembered");
     }
 
-    // #745: with ui.settings on, Cmd+, asks for the window and opens no card;
-    // the file is still one command away.
+    // #745: with ui.settings on (the default since #885), Cmd+, asks for the
+    // window and opens no card; the file is still one command away.
     #[test]
     fn with_the_settings_window_on_app_settings_asks_for_it_and_the_file_stays_reachable() {
         let mut h = Harness::new();
         four_cards(&mut h);
         let before = h.m.cards.len();
-        h.m.config.ui.settings = true;
+        assert!(h.m.config.ui.settings, "on by default");
         let effects = h.run("app.settings");
         assert!(effects.contains(&Effect::OpenSettingsWindow));
         assert_eq!(h.m.cards.len(), before, "no card opened");
@@ -3431,8 +3431,27 @@ mod tests {
     fn with_the_settings_window_off_app_settings_opens_the_file_and_asks_for_no_window() {
         let mut h = Harness::new();
         four_cards(&mut h);
+        h.m.config.ui.settings = false;
         let effects = h.run("app.settings");
         assert!(!effects.contains(&Effect::OpenSettingsWindow));
+        assert!(h
+            .m
+            .focused()
+            .and_then(|c| c.path.as_deref())
+            .unwrap_or("")
+            .ends_with("settings.json"));
+    }
+
+    // #885: the palette opens the window whatever `ui.settings` says.
+    #[test]
+    fn open_settings_window_asks_for_it_with_the_setting_off() {
+        let mut h = Harness::new();
+        four_cards(&mut h);
+        let before = h.m.cards.len();
+        h.m.config.ui.settings = false;
+        let effects = h.run("app.settings.window");
+        assert!(effects.contains(&Effect::OpenSettingsWindow));
+        assert_eq!(h.m.cards.len(), before, "no card opened");
     }
 
     // "Open a file" asks for the macOS panel, and what it picks opens as
