@@ -2215,8 +2215,9 @@ fn post_json(url: &str, body: &str) -> Result<(), String> {
 
 /// The `.app` an executable lives in: `.../x.app/Contents/MacOS/x` is three
 /// ancestors up. `None` for a bare binary, which is what `cargo run` and
-/// every test is, and which must not be "restarted" into anything.
-#[cfg(not(windows))]
+/// every test is, and which must not be "restarted" into anything. Linux
+/// has no bundle: its restart and update go through `current` instead.
+#[cfg(target_os = "macos")]
 fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
     exe.ancestors()
         .nth(3)
@@ -2265,17 +2266,30 @@ fn start_updater(app: &mut AppView) {
     if std::env::var_os("INFINITERM_DATA_DIR").is_some() {
         return;
     }
-    // Linux tells, never swaps: an install.sh or Homebrew install learns a
-    // newer build is out and the command that installs it (`updater.rs`).
+    // Linux (#840): an install.sh install stages a newer build beside the
+    // running one and a restart moves `current` to it; a Homebrew install
+    // learns a newer build is out and `brew upgrade` (`updater.rs`).
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let install = std::env::current_exe()
+        use infiniterm_core::update::{linux_install, linux_method, LinuxInstall};
+        let exe = std::env::current_exe()
             .ok()
-            .and_then(|exe| infiniterm_core::paths::canonical(exe).ok())
-            .and_then(|exe| infiniterm_core::update::linux_install(exe.parent()?, &home_dir()));
+            .and_then(|exe| infiniterm_core::paths::canonical(exe).ok());
+        let install = exe
+            .as_deref()
+            .and_then(|exe| linux_install(exe.parent()?, &home_dir()));
         if let (Some(install), Some(running)) = (install, app.build) {
-            app.updater = Some(crate::updater::start_notifier(running, install));
+            // `<root>/<version>/infiniterm`: the root is two folders up.
+            let root = match install {
+                LinuxInstall::Script => exe
+                    .as_deref()
+                    .and_then(|e| e.parent()?.parent())
+                    .map(std::path::Path::to_path_buf),
+                LinuxInstall::Brew => None,
+            };
+            app.updater = Some(crate::updater::start_linux(running, install, root));
             app.model.update_state = infiniterm_core::update::UpdateState::Current;
+            app.model.update_method = linux_method(install);
         }
     }
     // macOS and Windows: download, check, stage, swap at the next restart.
@@ -2301,6 +2315,7 @@ fn start_updater(app: &mut AppView) {
         };
         app.updater = Some(crate::updater::start(bundle.to_path_buf(), running, dir));
         app.model.update_state = infiniterm_core::update::UpdateState::Current;
+        app.model.update_method = infiniterm_core::update::METHOD_APP;
     }
 }
 
@@ -2356,11 +2371,72 @@ impl AppView {
         }
     }
 
+    /// Linux, an install.sh install (#840): `current` moves to the staged
+    /// version in one rename, the version folders other than the new and the
+    /// running one go (install.sh keeps two), and a waiter starts the app
+    /// through `current` once this process is gone. The running binary stays
+    /// mapped until the exit, and the `iftd` daemons it started keep running
+    /// for the new app to adopt. If the waiter cannot start, `current` goes
+    /// back and the app keeps running.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn install_linux_update(&mut self) {
+        use infiniterm_core::linux_update::{current_version, prune, repoint_current};
+        let Some(u) = &self.updater else { return };
+        let Some(staged) = u.staged.clone() else {
+            return;
+        };
+        let root = u.dir.clone();
+        let Some(new) = staged
+            .app
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+        else {
+            return;
+        };
+        let old = current_version(&root);
+        if let Err(e) = repoint_current(&root, &new) {
+            self.model
+                .notify(format!("could not install the update: {e}"));
+            return;
+        }
+        let exe = root.join("current").join("infiniterm");
+        self.flush_save();
+        let script =
+            infiniterm_core::update::relaunch_script(std::process::id(), &exe.to_string_lossy());
+        match spawn_waiter(&script) {
+            Ok(()) => {
+                let keep: Vec<&str> = std::iter::once(new.as_str())
+                    .chain(old.as_deref())
+                    .collect();
+                prune(&root, &keep);
+                self.announce_restart(&staged.version);
+                leave_now()
+            }
+            Err(e) => {
+                if let Some(old) = old {
+                    let _ = repoint_current(&root, &old);
+                }
+                self.model
+                    .notify(format!("could not start the update: {e}"));
+            }
+        }
+    }
+
     /// Hands the swap to a waiter that runs once this process is gone
     /// (`update::swap_script`), then quits. The Applications folder must be
     /// writable by this user, or the move would fail after we had already
     /// gone; checked first, and said.
     fn install_update_and_restart(&mut self) {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        self.install_linux_update();
+        #[cfg(any(target_os = "macos", windows))]
+        self.install_bundle_update();
+    }
+
+    /// The Mac's and Windows's half of `install_update_and_restart`.
+    #[cfg(any(target_os = "macos", windows))]
+    fn install_bundle_update(&mut self) {
         let Some(u) = &self.updater else { return };
         let Some(staged) = u.staged.clone() else {
             return;
@@ -2512,7 +2588,24 @@ fn spawn_waiter(script: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(not(windows))]
+/// Linux: the same binary again once this process is gone, through
+/// `current` for an install.sh install (`paths::stable_install_path`), so a
+/// restart after an install.sh run starts the version it installed. There
+/// is no bundle and no `open`; the waiter is a child, so the environment
+/// carries over by itself.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn relaunch_after_exit() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = infiniterm_core::paths::canonical(&exe).unwrap_or(exe);
+    let stable = infiniterm_core::paths::stable_install_path(&exe);
+    let exe = if stable.is_file() { stable } else { exe };
+    spawn_waiter(&infiniterm_core::update::relaunch_script(
+        std::process::id(),
+        &exe.to_string_lossy(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
 fn relaunch_after_exit() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
@@ -2576,7 +2669,7 @@ mod tests {
     // that is not an app and the restart quits into nothing. macOS only:
     // Windows has no bundle to walk up to and `bundle_of` is the exe's own
     // folder there.
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_bundle_is_three_above_the_executable() {
         use std::path::Path;

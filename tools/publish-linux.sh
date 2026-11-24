@@ -17,6 +17,13 @@
 #
 # DRY_RUN=1 uploads nothing. SHA_DIR=<dir> reads the two .sha256 files from
 # there instead of the release (tools/test-publish-linux.sh).
+#
+# NOT SIGNED. The app's Linux self-update (#840) requires an
+# `<arch>_signature` per architecture once `update::UPDATE_PUBLIC_KEY` is set
+# (`update::check_linux_signature`). The day a key is committed, this script
+# must sign the manifest (`ift update-sign`, over tag, build and each
+# architecture's sha256) in that same release, or every Linux self-update is
+# refused. See docs/agent/linux-port.md, "Self-update".
 set -eu
 cd "$(dirname "$0")/.."
 tag=${1:?usage: tools/publish-linux.sh <tag, like v0.6.3>}

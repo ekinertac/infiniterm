@@ -423,6 +423,8 @@ pub fn gate_args(words: &[String]) -> Result<Vec<String>, String> {
         // bare `proxy files` would let the phone write to the Mac.
         ["proxy", "files", "--read-only"] => true,
         ["--version"] | ["update", "status"] | ["workspaces"] => true,
+        // How the host updates (#840), so the phone shows the right command.
+        ["update", "status", "--method"] => true,
         ["run", "app.update.check"] | ["run", "app.update.install"] => true,
         ["read", "--stream"] => true,
         ["settings", "show"] | ["snippets", "--nul"] => true,
@@ -781,6 +783,8 @@ mod tests {
         assert!(ok(&["snippets", "--nul"]));
         assert!(ok(&["--version"]));
         assert!(ok(&["update", "status"]));
+        assert!(ok(&["update", "status", "--method"]));
+        assert!(!ok(&["update", "status", "--other"]));
         assert!(ok(&["run", "app.update.check"]));
         assert!(ok(&["run", "app.update.install"]));
         assert!(ok(&["workspaces"]));

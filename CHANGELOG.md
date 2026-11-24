@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-25
 
 - The palette lists the hosts you have joined: "Join: connect to host…" shows every host `ift join` has reached, the last joined first, and joins the one you pick, as if you had typed `ift join` with the same options. "Join: forget host…" takes one off the list. Neither has a key; bind `join.connect` or `join.forget` in keybindings.json for one. A host joined before this version is listed by its folder name until you join it once more.
+- On Linux, an install made with install.sh now updates itself like the Mac: a new release is downloaded and checked in the background, and a restart (or "App: install the downloaded update and restart", or Update in the iPhone app) switches to it. Your shells keep running through it. A Homebrew install still tells you to run `brew upgrade`, and a host running `ift serve` with no window is updated by running install.sh there. Restarting the app on Linux works now too. `ift update status --method` also says how the install is updated (app, install.sh, brew or none).
 
 ### 2026-11-24
 

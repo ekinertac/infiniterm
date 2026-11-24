@@ -41,15 +41,47 @@ pub const LATEST_URL: &str = if cfg!(windows) {
     "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json"
 };
 
-/// What `latest-linux.json` says about the newest Linux release, for the
-/// notice. Linux never swaps itself (docs/agent/linux-port.md,
-/// "Packaging"): install.sh or `brew upgrade` is the update, so only the
-/// version and build matter here.
+/// What `latest-linux.json` says about the newest Linux release for this
+/// machine's architecture. An install.sh install downloads and stages it
+/// (#840, `linux_update.rs`); a Homebrew install only gets the notice, so
+/// for it only the version and build matter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinuxRelease {
     pub version: String,
     pub build: u64,
     pub tag: String,
+    /// This architecture's tarball (`<arch>_url`).
+    pub url: String,
+    /// Its SHA-256 (`<arch>_sha256`), the check install.sh makes too.
+    pub sha256: String,
+    /// Hex of an Ed25519 signature over the tag, build and this sha256
+    /// (`<arch>_signature`, `update_sign::signed_message`). No release
+    /// carries one yet; see `check_linux_signature`.
+    pub signature: Option<String>,
+}
+
+/// The rule `UPDATE_PUBLIC_KEY` makes for a Linux release, as
+/// `check_manifest_signature` does for Windows: no key set, nothing is
+/// required; a key set, `<arch>_signature` must verify over the tag, build
+/// and that architecture's sha256.
+///
+/// THE DAY A KEY IS SET, `tools/publish-linux.sh` MUST SIGN
+/// `latest-linux.json` (an `x86_64_signature` and an `aarch64_signature`) IN
+/// THE SAME RELEASE. It signs nothing today, so with a key committed and an
+/// unsigned manifest every Linux self-update is refused (Ekin, #840).
+pub fn check_linux_signature(public_key_hex: &str, r: &LinuxRelease) -> Result<(), String> {
+    if public_key_hex.trim().is_empty() {
+        return Ok(());
+    }
+    let signature = r
+        .signature
+        .as_deref()
+        .ok_or("latest-linux.json is not signed, and this build requires a signature")?;
+    crate::update_sign::verify(
+        public_key_hex,
+        &crate::update_sign::signed_message(&r.tag, r.build, &r.sha256),
+        signature,
+    )
 }
 
 /// `latest-linux.json`, written by `tools/publish-linux.sh`: flat keys so
@@ -76,11 +108,17 @@ pub fn parse_linux_manifest(text: &str, arch: &str) -> Result<LinuxRelease, Stri
             "latest-linux.json points outside the release downloads: {url}"
         ));
     }
-    s(&format!("{arch}_sha256"))?;
+    let sha256 = s(&format!("{arch}_sha256"))?;
     Ok(LinuxRelease {
         version: s("version")?,
         build,
         tag: s("tag")?,
+        url,
+        sha256,
+        signature: v
+            .get(format!("{arch}_signature"))
+            .and_then(|x| x.as_str())
+            .map(String::from),
     })
 }
 
@@ -102,6 +140,37 @@ pub fn linux_install(exe_dir: &Path, home: &Path) -> Option<LinuxInstall> {
         .components()
         .any(|c| c.as_os_str() == "Cellar")
         .then_some(LinuxInstall::Brew)
+}
+
+/// How this install is updated, for `ift update status --method` (#840): an
+/// app that updates itself (the Mac, Windows), install.sh (which the Linux
+/// app now also does itself), Homebrew (notice only, `brew upgrade`), or
+/// none (a development build, a scratch instance, `ift serve`). The phone
+/// shows the matching command for `available`.
+pub const METHOD_APP: &str = "app";
+pub const METHOD_SCRIPT: &str = "install.sh";
+pub const METHOD_BREW: &str = "brew";
+pub const METHOD_NONE: &str = "none";
+
+pub fn linux_method(install: LinuxInstall) -> &'static str {
+    match install {
+        LinuxInstall::Script => METHOD_SCRIPT,
+        LinuxInstall::Brew => METHOD_BREW,
+    }
+}
+
+/// The waiter that starts a Linux app again once this process is gone:
+/// `exe` is the path through `current` (`paths::stable_install_path`), so
+/// after `linux_update::repoint_current` it is the new version. The waiter
+/// is this process's child, so the new app gets this one's environment
+/// (DISPLAY, the data and config folders) with nothing passed by hand,
+/// which `open` on the Mac needs `--env` for.
+#[cfg(unix)]
+pub fn relaunch_script(pid: u32, exe: &str) -> String {
+    format!(
+        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec {}",
+        crate::drop::posix_quote(exe)
+    )
 }
 
 /// The one line that updates that kind of install.
@@ -155,8 +224,11 @@ pub struct Manifest {
 /// it is empty a Windows update is checked by its SHA-256 alone, as it was
 /// before signatures existed, so merging the code changes nothing for anyone
 /// until he turns it on. Once it is set, a manifest with no valid signature
-/// is refused before anything is downloaded. Windows only: the Mac's check is
-/// its Developer ID signature and notarization.
+/// is refused before anything is downloaded. Windows, and since #840 an
+/// install.sh install on Linux (`check_linux_signature`): setting it means
+/// `tools/publish-linux.sh` must sign `latest-linux.json` in that same
+/// release, or every Linux self-update is refused. The Mac's check is its
+/// Developer ID signature and notarization.
 pub const UPDATE_PUBLIC_KEY: &str = "";
 
 /// The rule `UPDATE_PUBLIC_KEY` makes: with no key set, nothing is required;
@@ -418,7 +490,8 @@ pub enum UpdateState {
         version: String,
         build: u64,
     },
-    /// Linux: a newer build is out and nothing is downloaded.
+    /// Linux under Homebrew (or an install.sh stage that failed): a newer
+    /// build is out and nothing is downloaded.
     Available {
         version: String,
         build: u64,
@@ -444,6 +517,14 @@ impl UpdateState {
             }
         }
     }
+
+    /// `ift update status --method` (#840): the same line, then a TAB and
+    /// the install method (`METHOD_*`). Only behind the flag: phones already
+    /// shipped match the plain line's field counts exactly, so a field added
+    /// to it would make them read every status as unreadable.
+    pub fn status_line_with_method(&self, method: &str) -> String {
+        format!("{}\t{method}", self.status_line())
+    }
 }
 
 #[cfg(test)]
@@ -464,6 +545,38 @@ mod tests {
             build: 1105,
         };
         assert_eq!(out.status_line(), "available\t0.6.9\t1105");
+    }
+
+    // #840: the method only behind the flag, after a TAB; the plain line is
+    // what shipped phones parse and stays as it was.
+    #[test]
+    fn the_method_comes_only_with_the_flag() {
+        use super::UpdateState::*;
+        let out = Available {
+            version: "0.6.17".into(),
+            build: 1753,
+        };
+        assert_eq!(out.status_line(), "available\t0.6.17\t1753");
+        assert_eq!(
+            out.status_line_with_method(super::METHOD_BREW),
+            "available\t0.6.17\t1753\tbrew"
+        );
+        assert_eq!(Off.status_line_with_method(super::METHOD_NONE), "off\tnone");
+        assert_eq!(
+            super::linux_method(super::LinuxInstall::Script),
+            "install.sh"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_linux_relaunch_waits_for_this_pid_then_runs_the_path_through_current() {
+        assert_eq!(
+            super::relaunch_script(42, "/home/me/.local/share/infiniterm/current/infiniterm"),
+            "while kill -0 42 2>/dev/null; do sleep 0.1; done; exec /home/me/.local/share/infiniterm/current/infiniterm"
+        );
+        assert!(super::relaunch_script(42, "/home/a b/infiniterm")
+            .ends_with("exec '/home/a b/infiniterm'"));
     }
 
     // A reason with a line break or a tab would split the one line.
@@ -558,6 +671,35 @@ mod tests {
             LINUX_MANIFEST.replace("https://github.com/ekinertac", "https://evil.example");
         assert!(parse_linux_manifest(&elsewhere, "x86_64").is_err());
         assert!(parse_linux_manifest("{}", "x86_64").is_err());
+        // What a stage needs: this architecture's tarball and hash.
+        assert!(r.url.ends_with("infiniterm-linux-x86_64.tar.gz"));
+        assert_eq!((r.sha256.as_str(), r.signature.as_deref()), ("aa", None));
+        let arm = parse_linux_manifest(LINUX_MANIFEST, "aarch64").unwrap();
+        assert_eq!(arm.sha256, "bb");
+    }
+
+    // #840: the same rule as Windows. No key, nothing required; a key set,
+    // only a signature over this architecture's hash passes.
+    #[test]
+    fn a_linux_release_needs_a_signature_only_once_a_key_is_set() {
+        let (private, public) = crate::update_sign::generate().unwrap();
+        let mut r = parse_linux_manifest(LINUX_MANIFEST, "x86_64").unwrap();
+        assert!(check_linux_signature("", &r).is_ok());
+        assert!(check_linux_signature(&public, &r).is_err());
+        let sig = crate::update_sign::sign(
+            &private,
+            &crate::update_sign::signed_message(&r.tag, r.build, &r.sha256),
+        )
+        .unwrap();
+        let signed = LINUX_MANIFEST.replace(
+            "\"x86_64_sha256\": \"aa\",",
+            &format!("\"x86_64_sha256\": \"aa\", \"x86_64_signature\": \"{sig}\","),
+        );
+        r = parse_linux_manifest(&signed, "x86_64").unwrap();
+        assert!(check_linux_signature(&public, &r).is_ok());
+        // The other architecture's hash under the same signature fails.
+        r.sha256 = "bb".into();
+        assert!(check_linux_signature(&public, &r).is_err());
     }
 
     #[test]
@@ -853,7 +995,19 @@ mod tests {
         let _listener = UnixListener::bind(live.join("infiniterm.sock")).unwrap();
         // A window that is gone leaves its socket file behind: it refuses.
         drop(UnixListener::bind(dead.join("infiniterm.sock")).unwrap());
-        assert_eq!(live_viewer_dirs(&root), vec![live.clone()]);
+        // Asked a few times (up to 2 s): macOS marks a new socket
+        // close-on-exec only after it is made, so a child another test
+        // spawns in that moment (`tar`, `git`) can hold the dropped listener
+        // open until it exits.
+        let mut dirs = live_viewer_dirs(&root);
+        for _ in 0..40 {
+            if dirs == vec![live.clone()] {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            dirs = live_viewer_dirs(&root);
+        }
+        assert_eq!(dirs, vec![live.clone()]);
         assert!(live_viewer_dirs(&root.join("missing")).is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
