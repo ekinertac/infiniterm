@@ -10,6 +10,11 @@
 //! `Frame` is plain data: rows of runs with resolved colours, the cursor, a
 //! mode summary. Everything gpui needs and nothing it does not, so the paint
 //! is a loop and the crate stays free of the toolkit.
+//!
+//! A quiet terminal's history leaves alacritty for a compact store
+//! (`infiniterm_core::cold_history`, whose header has the numbers). The rule
+//! here: every method that could read or change history calls `wake` first;
+//! painting at the bottom needs only the screen and does not.
 use crate::palette::Palette;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -21,8 +26,17 @@ use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::ClipboardType;
 use alacritty_terminal::term::{viewport_to_point, Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
+use infiniterm_core::cold_history::ColdHistory;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+/// How long a terminal prints nothing, and nobody scrolls, searches or
+/// selects in it, before its history goes cold. Long enough that a program
+/// with pauses (a build, an agent thinking) is not moved back and forth,
+/// which costs a few milliseconds each way; short beside the minutes and
+/// hours a quiet card stays quiet (36 of 40 live cards had printed nothing
+/// for five minutes, 2026-11-24).
+pub const QUIET_MS: f64 = 30_000.;
 
 /// What the terminal asked for, drained per frame.
 #[derive(Clone, Debug)]
@@ -282,6 +296,15 @@ pub struct Grid {
     /// plain moves extend it; one made with Shift+move is the Mac's, and a
     /// plain move drops it.
     visual_sticky: bool,
+    /// The configured scrollback, which `cold` needs to put alacritty's
+    /// limit back after it borrows it.
+    scrollback: usize,
+    /// The history while this terminal is quiet; empty otherwise.
+    cold: ColdHistory,
+    /// Woken (by output, a scroll, a search ...) since `rest` last looked.
+    touched: bool,
+    /// When `rest` first saw nothing new.
+    quiet_since: f64,
 }
 
 /// What `find` found, in order from the top of the scrollback.
@@ -336,7 +359,37 @@ impl Grid {
             search: None,
             search_painted: false,
             visual_sticky: false,
+            scrollback,
+            cold: ColdHistory::default(),
+            touched: true,
+            quiet_since: 0.,
         }
+    }
+
+    /// The history back in alacritty, before anything that could read or
+    /// change it. Nothing but a flag on a terminal that is not cold.
+    fn wake(&mut self) {
+        self.touched = true;
+        self.cold.warm(&mut self.term, self.scrollback);
+    }
+
+    /// Called now and then: moves the history to the compact store once the
+    /// terminal has been quiet for `QUIET_MS`. True when it moved. A view
+    /// scrolled up, a search, a selection or visual mode is somebody reading,
+    /// however long nothing prints.
+    pub fn rest(&mut self, now: f64) -> bool {
+        if std::mem::take(&mut self.touched) {
+            self.quiet_since = now;
+            return false;
+        }
+        if now - self.quiet_since < QUIET_MS
+            || self.search.is_some()
+            || self.term.selection.is_some()
+            || self.visual()
+        {
+            return false;
+        }
+        self.cold.cool(&mut self.term, self.scrollback)
     }
 
     /// Visual mode (Cmd+Shift+C, 2026-09-27): a cursor over the output and
@@ -351,6 +404,7 @@ impl Grid {
     /// Starts at the terminal's own cursor, or the top-left of the view
     /// when that is off screen (alacritty's rule).
     pub fn visual_enter(&mut self) {
+        self.wake();
         if !self.visual() {
             self.term.toggle_vi_mode();
         }
@@ -469,6 +523,7 @@ impl Grid {
             self.search = None;
             return (0, 0);
         }
+        self.wake();
         let Ok(mut regex) = RegexSearch::new(&literal(query)) else {
             self.search = None;
             return (0, 0);
@@ -545,6 +600,7 @@ impl Grid {
 
     /// Parses `bytes`; the caller budgets how many per frame.
     pub fn advance(&mut self, bytes: &[u8]) {
+        self.wake();
         let pasting = self.bracketed_paste();
         self.advance_bytes(bytes);
         if pasting && !self.bracketed_paste() {
@@ -595,6 +651,7 @@ impl Grid {
         if size.cols == self.size.cols && size.rows == self.size.rows {
             return false;
         }
+        self.wake();
         self.size = size;
         self.term.resize(size);
         self.full_dirty = true;
@@ -629,6 +686,8 @@ impl Grid {
     }
 
     pub fn start_selection(&mut self, col: usize, row: usize, kind: SelectKind) {
+        // A word or a line that wraps can start above the screen.
+        self.wake();
         let ty = match kind {
             SelectKind::Cells => SelectionType::Simple,
             SelectKind::Words => SelectionType::Semantic,
@@ -650,7 +709,10 @@ impl Grid {
     /// with `scrollback` the history above it too, trailing blanks dropped
     /// from every line and from the end, and with `last` only the final N
     /// lines. Wrapped rows are one line.
-    pub fn text(&self, last: Option<usize>, scrollback: bool) -> String {
+    pub fn text(&mut self, last: Option<usize>, scrollback: bool) -> String {
+        if scrollback {
+            self.wake();
+        }
         let screen = self.term.screen_lines() as i32;
         let history = self.term.history_size() as i32;
         let top = if scrollback { -history } else { 0 };
@@ -770,6 +832,7 @@ impl Grid {
 
     /// Scrolls the view by `lines` (positive is up into history).
     pub fn scroll(&mut self, lines: i32) {
+        self.wake();
         self.term.scroll_display(Scroll::Delta(lines));
     }
 
@@ -847,6 +910,7 @@ impl Grid {
     /// Clears the screen and the scrollback, keeping the cursor line: the
     /// reference's `card.clear`, iTerm2's clear.
     pub fn clear(&mut self) {
+        self.wake();
         // ESC c would reset modes a running program relies on; this is the
         // scrollback-and-screen clear alacritty binds to Cmd+K.
         self.processor
@@ -858,6 +922,7 @@ impl Grid {
     /// the whole ring again and must not land on top of the copy the grid
     /// already holds.
     pub fn reset(&mut self) {
+        self.wake();
         self.processor.advance(&mut self.term, b"\x1bc\x1b[3J");
         self.kitty_asked = false;
         self.full_dirty = true;
@@ -1108,6 +1173,113 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+    /// A grid with `lines` numbered lines that has gone cold.
+    fn cold_grid(lines: usize) -> Grid {
+        let mut g = Grid::new(40, 5, 100);
+        for i in 0..lines {
+            g.advance(format!("line {i}\r\n").as_bytes());
+        }
+        assert!(!g.rest(0.), "output was just seen");
+        assert!(!g.rest(QUIET_MS - 1.), "not quiet for long enough");
+        assert!(g.rest(QUIET_MS), "quiet");
+        assert_eq!(g.term.history_size(), 0, "the history left alacritty");
+        g
+    }
+
+    #[test]
+    fn a_cold_grid_answers_like_one_that_never_rested() {
+        type Ask = fn(&mut Grid) -> String;
+        let asks: &[(&str, Ask)] = &[
+            ("read", |g| g.text(None, true)),
+            ("read the screen", |g| g.text(None, false)),
+            ("find", |g| format!("{:?}", g.find("line 3"))),
+            ("scroll up", |g| {
+                g.scroll(20);
+                format!("{:?}", g.frame(&Palette::default_palette()).rows[0].text)
+            }),
+            ("output", |g| {
+                g.advance(b"more\r\n");
+                g.text(None, true)
+            }),
+            ("resize", |g| {
+                g.resize(17, 9);
+                g.text(None, true)
+            }),
+            ("clear", |g| {
+                g.clear();
+                g.text(None, true)
+            }),
+            ("reset", |g| {
+                g.reset();
+                g.text(None, true)
+            }),
+            ("select", |g| {
+                g.scroll(10);
+                g.start_selection(0, 0, SelectKind::Lines);
+                g.update_selection(20, 3, true);
+                format!("{:?}", g.selection_text())
+            }),
+            ("visual mode", |g| {
+                g.visual_enter();
+                g.visual_move(CursorMove::Top, false);
+                g.visual_select(VisualSelect::Lines);
+                format!("{:?}", g.selection_text())
+            }),
+        ];
+        for (name, ask) in asks {
+            let mut cold = cold_grid(60);
+            let mut stock = Grid::new(40, 5, 100);
+            for i in 0..60 {
+                stock.advance(format!("line {i}\r\n").as_bytes());
+            }
+            assert_eq!(ask(&mut cold), ask(&mut stock), "{name}");
+        }
+    }
+
+    #[test]
+    fn somebody_reading_keeps_the_history_warm() {
+        let long = QUIET_MS * 10.;
+        type Act = fn(&mut Grid);
+        let read: &[(&str, Act)] = &[
+            ("scrolled up", |g| g.scroll(5)),
+            ("a search", |g| {
+                g.find("line");
+            }),
+            ("a selection", |g| {
+                g.start_selection(0, 0, SelectKind::Words)
+            }),
+            ("visual mode", |g| g.visual_enter()),
+        ];
+        for (name, act) in read {
+            let mut g = cold_grid(60);
+            act(&mut g);
+            assert!(!g.rest(long));
+            assert!(!g.rest(long * 2.), "{name}");
+            assert!(g.term.history_size() > 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn painting_a_cold_grid_does_not_wake_it() {
+        let mut g = cold_grid(60);
+        let frame = g.frame(&Palette::default_palette());
+        assert_eq!(frame.rows[0].text.trim_end(), "line 56");
+        assert_eq!(g.term.history_size(), 0);
+        // Nor does it count as use: it stays cold with nothing to do.
+        assert!(!g.rest(QUIET_MS * 3.));
+        assert_eq!(g.term.history_size(), 0);
+    }
+
+    #[test]
+    fn a_grid_goes_cold_again_after_the_next_quiet() {
+        let mut g = cold_grid(60);
+        g.advance(b"x\r\n");
+        let t = QUIET_MS * 2.;
+        assert!(!g.rest(t));
+        assert!(!g.rest(t + QUIET_MS - 1.));
+        assert!(g.rest(t + QUIET_MS));
+        assert_eq!(g.text(None, true).lines().count(), 61);
+    }
 
     // `ift read`: the screen, the history above it, and the last N lines.
     #[test]

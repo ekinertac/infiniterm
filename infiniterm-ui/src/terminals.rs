@@ -235,6 +235,20 @@ impl AppView {
         rejoined
     }
 
+    /// Between frames, hidden window or not: a terminal that has been quiet
+    /// gives up its history's rows (`Grid::rest`). One per poll, so the
+    /// cards that all went quiet together after a launch do not add their
+    /// few milliseconds up into one long tick.
+    pub fn idle_terminals(&mut self, now: f64) {
+        for body in self.bodies.values_mut() {
+            if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
+                if t.grid.rest(now) {
+                    return;
+                }
+            }
+        }
+    }
+
     pub fn reconcile_terminals(&mut self, window: &Window) {
         // Before the cards are read below, so a card rejoined here is seen as
         // live by this frame.
