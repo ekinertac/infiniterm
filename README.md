@@ -54,7 +54,7 @@ Big items only, in rough order. No dates.
 - **Light mode:** the chrome follows a light theme. Today a light theme gives light cards on a dark chrome.
 - **More agents:** Cursor (`ift install-cursor-hooks`) and Antigravity CLI (`ift install-antigravity-hooks`) are in.
 - **Remote files:** editor and diff cards on a server's files, so `ift file` and `EDITOR=ift` work in a remote window.
-- **Windows and Linux:** both build from the same source, with known gaps. Windows has an experimental download (a zip, not signed, tested on Windows 11 only, no updates), and a Mac can join its terminal cards. The Linux app has only been run on a server with no screen, and there is a tarball on the release. Neither has a browser card yet. Windows servers for `ift connect` wait for a session daemon there. macOS is the supported platform.
+- **Windows and Linux:** both build from the same source, with known gaps. Windows has an experimental download (a zip, not signed, tested on Windows 11 only, no updates), and a Mac can join its terminal cards. Linux has an installer that works on Ubuntu 24.04 (x86_64), but the app has only been run on a machine with no screen. Neither has a browser card yet. Windows servers for `ift connect` wait for a session daemon there. macOS is the supported platform.
 - **Editor palette:** go to file and pick a syntax from inside an editor card.
 - **A phone app:** an iPhone app is in development, not in the App Store yet. See [the guide](https://infiniterm.app/guide/phone/).
 
