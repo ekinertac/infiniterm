@@ -377,6 +377,15 @@ impl Grid {
         self.cold.warm(&mut self.term, self.scrollback);
     }
 
+    /// For the methods that read history without `wake` because a selection,
+    /// a search or visual mode is on, which `rest` refuses to cool under:
+    /// tests fail if that ever stops being true. After the check that one of
+    /// them IS on, not before it: Cmd+C with nothing selected is asked of a
+    /// cold terminal too.
+    fn expect_warm(&self) {
+        debug_assert!(self.cold.is_empty(), "history read while cold");
+    }
+
     /// Called now and then: moves the history to the compact store once the
     /// terminal has been quiet for `QUIET_MS`. True when it moved. A view
     /// scrolled up, a search, a selection or visual mode is somebody reading,
@@ -441,6 +450,7 @@ impl Grid {
         if !self.visual() {
             return;
         }
+        self.expect_warm();
         if extend || self.visual_sticky {
             if !self.has_selection() {
                 self.select_at_cursor(SelectionType::Simple);
@@ -489,6 +499,7 @@ impl Grid {
     /// `v`, `V`, Ctrl+V: vim's toggle. The same kind again ends the
     /// selection; another kind converts it; none starts one at the cursor.
     pub fn visual_select(&mut self, kind: VisualSelect) {
+        self.expect_warm();
         let ty = match kind {
             VisualSelect::Cells => SelectionType::Simple,
             VisualSelect::Lines => SelectionType::Lines,
@@ -583,6 +594,7 @@ impl Grid {
     /// The text of the match you are on, for Cmd+C while the bar is open.
     pub fn find_current_text(&self) -> Option<String> {
         let s = self.search.as_ref()?;
+        self.expect_warm();
         let m = &s.matches[s.current];
         Some(self.term.bounds_to_string(*m.start(), *m.end()))
     }
@@ -592,6 +604,7 @@ impl Grid {
         let Some(s) = self.search.as_ref() else {
             return (0, 0);
         };
+        self.expect_warm();
         let (n, i, at) = (s.matches.len(), s.current, *s.matches[s.current].start());
         self.term.scroll_to_point(at);
         (n, i + 1)
@@ -707,6 +720,9 @@ impl Grid {
     /// cell, so a drag that ends on a character takes it.
     pub fn update_selection(&mut self, col: usize, row: usize, right: bool) {
         let point = self.point_at(col, row);
+        if self.term.selection.is_some() {
+            self.expect_warm();
+        }
         if let Some(sel) = self.term.selection.as_mut() {
             sel.update(point, if right { Side::Right } else { Side::Left });
         }
@@ -750,6 +766,9 @@ impl Grid {
     /// two are one line and the break becomes a space. A short row keeps
     /// its newline, so code and lists keep their lines.
     pub fn selection_text(&self) -> Option<String> {
+        if self.term.selection.is_some() {
+            self.expect_warm();
+        }
         let raw = self.term.selection_to_string().filter(|s| !s.is_empty())?;
         let range = self.term.selection.as_ref()?.to_range(&self.term)?;
         if range.is_block || range.start.line == range.end.line {
@@ -1275,6 +1294,28 @@ mod tests {
         // Nor does it count as use: it stays cold with nothing to do.
         assert!(!g.rest(QUIET_MS * 3.));
         assert_eq!(g.term.history_size(), 0);
+    }
+
+    #[test]
+    fn a_cold_grid_is_asked_for_a_selection_it_does_not_have() {
+        let mut g = cold_grid(60);
+        // Cmd+C, and a drag whose selection a keystroke just dropped.
+        assert_eq!(g.selection_text(), None);
+        g.update_selection(3, 1, true);
+        g.find_step(true);
+        assert_eq!(g.find_current_text(), None);
+        assert!(!g.has_selection());
+        assert_eq!(g.term.history_size(), 0, "nothing woke it");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "history read while cold")]
+    fn reading_a_selection_of_a_cold_grid_fails_the_tests() {
+        let mut g = cold_grid(60);
+        // What a `rest` that forgot the selection would leave behind.
+        g.select_at_cursor(SelectionType::Simple);
+        g.selection_text();
     }
 
     #[test]
