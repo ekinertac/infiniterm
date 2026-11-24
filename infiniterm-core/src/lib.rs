@@ -121,6 +121,7 @@ pub mod layout_file;
 pub mod licence;
 pub mod links;
 pub mod links_fs;
+pub mod linux_update;
 pub mod look_migration;
 pub mod model;
 pub mod omni;

@@ -1208,6 +1208,9 @@ pub struct Model {
     pub dev_build: bool,
     /// What the updater last said, set by the ui; `ift update status` reads it.
     pub update_state: crate::update::UpdateState,
+    /// How this install is updated (`update::METHOD_*`), set by the ui with
+    /// the updater; `ift update status --method` adds it (#840).
+    pub update_method: &'static str,
     /// Config pairs that are open: both ids and the card to return to.
     pub config_pairs: Vec<ConfigPair>,
     /// The last few cards closed, newest last, so a close can be undone.
@@ -1427,6 +1430,7 @@ impl Model {
             home: String::new(),
             dev_build: cfg!(debug_assertions),
             update_state: crate::update::UpdateState::Off,
+            update_method: crate::update::METHOD_NONE,
             config_pairs: vec![],
             closed: vec![],
             parked: vec![],

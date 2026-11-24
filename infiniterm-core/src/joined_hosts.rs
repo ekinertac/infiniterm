@@ -192,6 +192,11 @@ fn window_open(_dir: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// How long a closed listener may take to stop answering in a test
+    /// (40 x 50 ms = 2 s): the child of another test can hold it that long.
+    const SETTLE_TRIES: u32 = 40;
+    const SETTLE_MS: u64 = 50;
+
     fn scratch() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ift-joined-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -357,8 +362,19 @@ mod tests {
         .unwrap();
         assert!(forget(&root, "box").unwrap_err().contains("window is open"));
         drop(listener);
-        // The socket file a quit window leaves behind does not count.
-        assert!(forget(&root, "box").is_ok());
+        // The socket file a quit window leaves behind does not count. Asked
+        // a few times: macOS marks a new socket close-on-exec only after it
+        // is made, so a child another test spawns in that moment (`tar`,
+        // `git`) can hold the listener open until it exits.
+        let mut forgot = forget(&root, "box");
+        for _ in 0..SETTLE_TRIES {
+            if forgot.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(SETTLE_MS));
+            forgot = forget(&root, "box");
+        }
+        assert!(forgot.is_ok(), "{forgot:?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

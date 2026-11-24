@@ -174,7 +174,9 @@ ift — drive infiniterm from a shell
                              current, ready (a download waits for a restart),
                              available or failed, then version and build or
                              the reason, tab separated. app.update.check asks
-                             for a check, app.update.install restarts into it
+                             for a check, app.update.install restarts into it.
+                             --method adds how this install updates: app,
+                             install.sh, brew or none
   ift push add <id> --server <url>
                              give a phone companion app's push id to this
                              Mac, with its relay url (https only)
@@ -348,7 +350,14 @@ fn main() -> ExitCode {
         Some("commands") => send_table("commands", &["id", "label", "key"]),
         Some("usage") => send("usage", rest()),
         Some("update") => match args.get(1).map(String::as_str) {
-            Some("status") => send("update-status", vec![]),
+            Some("status") => match args.get(2).map(String::as_str) {
+                None => send("update-status", vec![]),
+                Some("--method") => send("update-status", vec!["--method".into()]),
+                Some(other) => {
+                    eprintln!("ift: update status takes only --method, not {other}");
+                    ExitCode::from(2)
+                }
+            },
             _ => {
                 eprintln!("ift: update takes one word: status");
                 ExitCode::from(2)

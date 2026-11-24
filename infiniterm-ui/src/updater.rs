@@ -28,12 +28,16 @@
 //! (`update::swap_script`), which `app.restart` and `app.update.install`
 //! both reach.
 //!
-//! LINUX ONLY NOTIFIES (#464, docs/agent/linux-port.md "Packaging"):
-//! install.sh or `brew upgrade` is the update there, so `start_notifier`
-//! polls `latest-linux.json` and says a newer build is out, with the one
-//! command that installs it; nothing is downloaded or swapped. The
-//! downloader below is the Mac's and Windows's and is not reached on Linux,
-//! hence the dead-code allowance there rather than a cfg on every item.
+//! LINUX (#464, #840, docs/agent/linux-port.md "Packaging"): `start_linux`
+//! polls `latest-linux.json`. An install.sh install stages the newer build
+//! the way install.sh would (`infiniterm_core::linux_update::stage`: the
+//! sha256, the signature once a key is set, unpacked beside the running
+//! version, `current` untouched) and reports it ready, so a restart or
+//! `app.update.install` moves `current` and starts the new version, as on
+//! the Mac. A Homebrew install only says a newer build is out, with
+//! `brew upgrade`: brew owns its files. The downloader below is the Mac's
+//! and Windows's and is not reached on Linux, hence the dead-code allowance
+//! there rather than a cfg on every item.
 #![cfg_attr(all(unix, not(target_os = "macos")), allow(dead_code))]
 use infiniterm_core::update::{is_newer, parse_manifest, Manifest, CHECK_EVERY_MS, LATEST_URL};
 // The signature requirement is the macOS half of the check; Windows has
@@ -169,47 +173,104 @@ pub fn start(bundle: PathBuf, running: u64, dir: PathBuf) -> Updater {
     }
 }
 
-/// Linux: the same hourly poll, of `latest-linux.json`, telling the ui once
-/// per newer build that it is out (`UpdateEvent::Available`); a check
-/// somebody asked for also says when there is nothing new or the check
-/// failed. Downloads nothing (see the header).
+/// Linux: the same hourly poll, of `latest-linux.json`. `root` is the
+/// install.sh folder (`~/.local/share/infiniterm`) for an install.sh install
+/// and `None` under Homebrew. With a root, a newer build is staged into it
+/// and reported `Ready` once (`Updater.dir` keeps the root for the install);
+/// a stage that fails says so to the one who asked, and the timer's falls
+/// back to the notice with install.sh's command, so a broken download never
+/// hides that a release is out. Without one, the notice only (#464). A check
+/// somebody asked for also says when there is nothing new.
 #[cfg(all(unix, not(target_os = "macos")))]
-pub fn start_notifier(running: u64, install: infiniterm_core::update::LinuxInstall) -> Updater {
+pub fn start_linux(
+    running: u64,
+    install: infiniterm_core::update::LinuxInstall,
+    root: Option<PathBuf>,
+) -> Updater {
     use infiniterm_core::update::{linux_update_hint, parse_linux_manifest};
     let (tx, events) = channel();
     let (wake, woken) = channel::<()>();
     // A manifest elsewhere, for tools/drive/linux/update-test.sh (curl takes
-    // a file:// URL). Honoured here only: this path downloads nothing, so a
-    // redirected manifest can change a notice and nothing else.
+    // a file:// URL). The tarball it names must still be under the release
+    // downloads (`parse_linux_manifest`) and match its sha256, so a
+    // redirected manifest cannot install anything the releases do not hold.
     let url = std::env::var("INFINITERM_LATEST_URL").unwrap_or_else(|_| LATEST_URL.to_string());
+    let thread_root = root.clone();
     std::thread::spawn(move || {
         let mut told: Option<u64> = None;
+        let mut staged: Option<Staged> = None;
         let mut asked = false;
         loop {
             let found = run("curl", &["-fsSL", "--max-time", "30", &url])
                 .and_then(|text| parse_linux_manifest(&text, std::env::consts::ARCH));
+            let available = |r: &infiniterm_core::update::LinuxRelease| UpdateEvent::Available {
+                version: r.version.clone(),
+                build: r.build,
+                hint: linux_update_hint(install),
+            };
             match found {
-                Ok(r) if r.build > running && told != Some(r.build) => {
-                    told = Some(r.build);
-                    let _ = tx.send(UpdateEvent::Available {
-                        version: r.version,
-                        build: r.build,
-                        hint: linux_update_hint(install),
-                    });
+                Ok(r) if r.build <= running => {
+                    if asked {
+                        let _ = tx.send(UpdateEvent::UpToDate);
+                    }
                 }
-                Ok(r) if asked && r.build <= running => {
-                    let _ = tx.send(UpdateEvent::UpToDate);
+                // Staged already: say it again only to the one who asks.
+                Ok(r) if staged.as_ref().is_some_and(|s| s.build == r.build) => {
+                    if asked {
+                        let _ = tx.send(answer_asked(staged.as_ref()));
+                    }
                 }
-                // Told once already by the timer's check: say it again to the
-                // one who asks (#619), never "up to date".
-                Ok(r) if asked => {
-                    let _ = tx.send(UpdateEvent::Available {
-                        version: r.version,
-                        build: r.build,
-                        hint: linux_update_hint(install),
-                    });
-                }
-                Ok(_) => {}
+                Ok(r) => match &thread_root {
+                    Some(root) => {
+                        let fetch = |from: &str, to: &Path| {
+                            run(
+                                "curl",
+                                &[
+                                    "-fsSL",
+                                    "--max-time",
+                                    "900",
+                                    "-o",
+                                    &to.to_string_lossy(),
+                                    from,
+                                ],
+                            )
+                            .map(|_| ())
+                        };
+                        match infiniterm_core::linux_update::stage(
+                            &r,
+                            root,
+                            infiniterm_core::update::UPDATE_PUBLIC_KEY,
+                            fetch,
+                        ) {
+                            Ok(dir) => {
+                                let s = Staged {
+                                    version: r.version.clone(),
+                                    build: r.build,
+                                    app: dir,
+                                };
+                                staged = Some(s.clone());
+                                let _ = tx.send(UpdateEvent::Ready(s));
+                            }
+                            Err(e) if asked => {
+                                let _ = tx.send(UpdateEvent::Failed(e));
+                            }
+                            Err(e) => {
+                                eprintln!("[infiniterm] update stage: {e}");
+                                if told != Some(r.build) {
+                                    told = Some(r.build);
+                                    let _ = tx.send(available(&r));
+                                }
+                            }
+                        }
+                    }
+                    // Homebrew: once per build, and again to the one who
+                    // asks (#619), never "up to date".
+                    None if asked || told != Some(r.build) => {
+                        told = Some(r.build);
+                        let _ = tx.send(available(&r));
+                    }
+                    None => {}
+                },
                 Err(e) if asked => {
                     let _ = tx.send(UpdateEvent::Failed(e));
                 }
@@ -228,7 +289,7 @@ pub fn start_notifier(running: u64, install: infiniterm_core::update::LinuxInsta
         staged: None,
         available: None,
         bundle: PathBuf::new(),
-        dir: PathBuf::new(),
+        dir: root.unwrap_or_default(),
     }
 }
 
