@@ -27,11 +27,19 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Term, TermMode};
+use alacritty_terminal::vte::ansi::Color;
 
-/// How far back a style is looked for before it is stored again. Output uses
-/// a handful of styles at a time, so the last few dozen find nearly all; a
-/// longer look would cost more time than the bytes it saves.
-const STYLE_LOOKBACK: usize = 32;
+/// Styles remembered while storing, one per slot of a cheap hash. One look
+/// per style change, not a search: output with a colour per cell took 114 ms
+/// to store with a search of the last 32. A style that lost its slot is
+/// stored again, which costs a few bytes.
+const STYLE_SLOTS: usize = 256;
+const NO_STYLE: u32 = u32::MAX;
+
+/// The store must stay under this share of what the cells cost, or the
+/// history is left alone: a different colour in every cell (a picture drawn
+/// in half blocks) is bigger as runs than as cells.
+const WORTH_DIVISOR: usize = 2;
 
 /// A terminal's history while it is cold. Empty when it is warm.
 #[derive(Default)]
@@ -53,8 +61,11 @@ impl ColdHistory {
 
     /// Moves the whole history out of `term` and frees its rows, the ones
     /// alacritty keeps allocated ahead included. Does nothing, and says so,
-    /// when there is nothing to move or the terminal is not at rest on its
-    /// primary screen. `limit` is the terminal's configured scrollback.
+    /// when there is nothing to move, it would not be worth it
+    /// (`WORTH_DIVISOR`), or the terminal is not at rest on its primary
+    /// screen. A refusal can cost as much as a success, so the owner asks
+    /// once per change, not on every tick. `limit` is the terminal's
+    /// configured scrollback.
     pub fn cool<T: EventListener>(&mut self, term: &mut Term<T>, limit: usize) -> bool {
         let history = term.history_size();
         if !self.is_empty()
@@ -70,6 +81,8 @@ impl ColdHistory {
             return false;
         }
         let blank = Cell::default();
+        let worth = history * cols * std::mem::size_of::<Cell>() / WORTH_DIVISOR;
+        let mut slots = [NO_STYLE; STYLE_SLOTS];
         for i in (1..=history as i32).rev() {
             let row = &term.grid()[Line(-i)][..Column(cols)];
             let end = row.iter().rposition(|c| *c != blank).map_or(0, |p| p + 1);
@@ -81,7 +94,7 @@ impl ColdHistory {
                 match same {
                     Some(_) => self.runs.last_mut().expect("a run is open").1 += 1,
                     None => {
-                        let s = self.style(cell);
+                        let s = self.style(cell, &mut slots);
                         self.runs.push((s, 1));
                         last = Some(s);
                         runs += 1;
@@ -89,6 +102,10 @@ impl ColdHistory {
                 }
             }
             self.rows.push(runs);
+            if self.bytes() > worth {
+                *self = ColdHistory::default();
+                return false;
+            }
         }
         self.text.shrink_to_fit();
         self.styles.shrink_to_fit();
@@ -111,8 +128,7 @@ impl ColdHistory {
         let rows = cold.rows.len();
         let grid = term.grid_mut();
         // alacritty's only public way to grow history: to the limit, so the
-        // limit is the size wanted for a moment. Then drop the rows it
-        // allocated ahead.
+        // limit is the size wanted for a moment.
         grid.update_history(rows);
         grid.initialize_all();
         grid.update_history(limit);
@@ -132,20 +148,43 @@ impl ColdHistory {
         }
     }
 
-    /// The index of `cell`'s style, stored if the last few do not have it.
-    fn style(&mut self, cell: &Cell) -> u32 {
-        let from = self.styles.len().saturating_sub(STYLE_LOOKBACK);
-        if let Some(i) = self.styles[from..]
-            .iter()
-            .rposition(|s| same_style(s, cell))
-        {
-            return (from + i) as u32;
+    /// The index of `cell`'s style, stored if its slot holds another.
+    fn style(&mut self, cell: &Cell, slots: &mut [u32; STYLE_SLOTS]) -> u32 {
+        let slot = &mut slots[style_slot(cell)];
+        if *slot != NO_STYLE && same_style(&self.styles[*slot as usize], cell) {
+            return *slot;
         }
         let mut style = cell.clone();
         style.c = ' ';
         self.styles.push(style);
-        (self.styles.len() - 1) as u32
+        *slot = (self.styles.len() - 1) as u32;
+        *slot
     }
+
+    /// What the store holds so far (its own vectors, not what a hyperlink or
+    /// a zero-width character points at: those the cells share).
+    fn bytes(&self) -> usize {
+        self.text.len()
+            + std::mem::size_of_val(&self.styles[..])
+            + std::mem::size_of_val(&self.runs[..])
+            + std::mem::size_of_val(&self.rows[..])
+    }
+}
+
+/// A slot from what usually tells styles apart. Cells whose link or
+/// underline colour differs share one, which only costs a style stored again.
+fn style_slot(cell: &Cell) -> usize {
+    let color = |c: Color| match c {
+        Color::Named(n) => n as u32,
+        Color::Indexed(i) => 1 << 24 | i as u32,
+        Color::Spec(rgb) => 2 << 24 | (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32,
+    };
+    // Fibonacci hashing (2^32 over the golden ratio): the top bits mix all.
+    let h = color(cell.fg)
+        .wrapping_mul(0x9E37_79B1)
+        .wrapping_add(color(cell.bg).wrapping_mul(0x85EB_CA77))
+        .wrapping_add((cell.flags.bits() as u32).wrapping_mul(0xC2B2_AE3D));
+    (h >> 24) as usize % STYLE_SLOTS
 }
 
 /// Everything about two cells but the character.
@@ -324,6 +363,39 @@ mod tests {
                 assert_eq!(cold.dump(), stock.dump(), "{a}, then {b}");
             }
         }
+    }
+
+    #[test]
+    fn a_history_bigger_as_runs_than_as_cells_is_left_alone() {
+        let picture = || -> Vec<u8> {
+            (0..200usize)
+                .flat_map(|r| {
+                    let cells = (0..40usize).map(move |c| {
+                        format!("\x1b[38;2;{c};{r};{};48;2;{r};{c};9m\u{2580}", r * c % 256)
+                    });
+                    cells
+                        .chain(["\x1b[0m\r\n".into()])
+                        .flat_map(String::into_bytes)
+                        .collect::<Vec<u8>>()
+                })
+                .collect()
+        };
+        let mut t = T::new(10, 40);
+        let mut stock = T::new(10, 40);
+        t.feed(&picture());
+        stock.feed(&picture());
+        assert!(!t.rest(), "not worth it");
+        assert!(t.cold.is_empty() && t.term.history_size() > 0);
+        assert_eq!(t.dump(), stock.dump());
+        // Styles by turns are: eight colours, one cell each.
+        let mut t = T::new(10, 40);
+        for r in 0..200 {
+            let line: String = (0..40).map(|c| format!("\x1b[3{}mx", (r + c) % 8)).collect();
+            t.feed(line.as_bytes());
+            t.feed(b"\r\n");
+        }
+        assert!(t.rest());
+        assert!(t.cold.styles.len() < 100, "a style per slot, not per cell");
     }
 
     #[test]

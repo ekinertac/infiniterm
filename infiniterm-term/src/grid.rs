@@ -305,6 +305,9 @@ pub struct Grid {
     touched: bool,
     /// When `rest` first saw nothing new.
     quiet_since: f64,
+    /// `rest` has asked since the last touch: a history that was refused
+    /// (not worth it) is not walked again every tick.
+    asked: bool,
 }
 
 /// What `find` found, in order from the top of the scrollback.
@@ -363,6 +366,7 @@ impl Grid {
             cold: ColdHistory::default(),
             touched: true,
             quiet_since: 0.,
+            asked: false,
         }
     }
 
@@ -380,15 +384,18 @@ impl Grid {
     pub fn rest(&mut self, now: f64) -> bool {
         if std::mem::take(&mut self.touched) {
             self.quiet_since = now;
+            self.asked = false;
             return false;
         }
-        if now - self.quiet_since < QUIET_MS
+        if self.asked
+            || now - self.quiet_since < QUIET_MS
             || self.search.is_some()
             || self.term.selection.is_some()
             || self.visual()
         {
             return false;
         }
+        self.asked = true;
         self.cold.cool(&mut self.term, self.scrollback)
     }
 
@@ -1268,6 +1275,20 @@ mod tests {
         // Nor does it count as use: it stays cold with nothing to do.
         assert!(!g.rest(QUIET_MS * 3.));
         assert_eq!(g.term.history_size(), 0);
+    }
+
+    #[test]
+    fn a_refused_grid_is_asked_again_only_after_something_happens() {
+        let mut g = Grid::new(40, 5, 100);
+        // The alternate screen is one of the reasons to refuse.
+        g.advance(b"a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\n\x1b[?1049h");
+        assert!(!g.rest(0.));
+        assert!(!g.rest(QUIET_MS));
+        assert!(g.asked);
+        g.advance(b"\x1b[?1049l");
+        assert!(!g.rest(QUIET_MS * 2.));
+        assert!(!g.asked);
+        assert!(g.rest(QUIET_MS * 3.));
     }
 
     #[test]
