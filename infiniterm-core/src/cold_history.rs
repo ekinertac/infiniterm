@@ -3,9 +3,9 @@
 //!
 //! alacritty keeps every history row at full width, 24 bytes a cell, plus up
 //! to a thousand empty rows it allocates ahead. Replaying 39 real sessions at
-//! their real sizes (2026-11-24) cost 550 MB in the cards' terminals for
-//! 94,460 rows whose content is a few hundred bytes each, and nine in ten of
-//! those cards had printed nothing for five minutes.
+//! their real sizes (2026-11-24) cost 457 MB in the cards' terminals for
+//! 93,712 rows, 32 MB held here, and nine in ten of those cards had printed
+//! nothing for five minutes.
 //!
 //! ALL OR NOTHING, on purpose. `cool` moves the whole history out, `warm`
 //! puts the whole history back, and the owner calls `warm` before ANYTHING
