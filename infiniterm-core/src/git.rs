@@ -155,6 +155,12 @@ pub fn git_changes(path: &str) -> Result<Changes, String> {
 }
 
 /// A file as it was at HEAD, or empty for one HEAD did not have.
+///
+/// An error for a file HEAD did not have that git ignores (#879): a `.env`
+/// or build output is not a new file waiting to be committed, and an empty
+/// base would mark every line of it as added. The editor then shows no
+/// gutter, as for a file outside any repo. A tracked file listed in
+/// `.gitignore` is in HEAD and never reaches the check.
 pub fn git_show_head(repo: &str, path: &str) -> Result<String, String> {
     if path.contains("..") {
         return Err("invalid path".into());
@@ -162,9 +168,22 @@ pub fn git_show_head(repo: &str, path: &str) -> Result<String, String> {
     match git(Path::new(repo), &["show", &format!("HEAD:{path}")]) {
         Ok(text) => Ok(text),
         // "exists on disk, but not in 'HEAD'" — a new file; the diff is all of it.
-        Err(e) if e.contains("does not exist") || e.contains("exists on disk") => Ok(String::new()),
+        Err(e) if e.contains("does not exist") || e.contains("exists on disk") => {
+            if is_ignored(repo, path) {
+                Err(format!("{path}: ignored by git"))
+            } else {
+                Ok(String::new())
+            }
+        }
         Err(e) => Err(e),
     }
+}
+
+/// Whether git ignores `path` (relative to `repo`). `check-ignore` exits 0
+/// for an ignored path, 1 for one that is not, 128 on an error; only 0 is
+/// a yes, so a failure keeps the old answer (an untracked file).
+fn is_ignored(repo: &str, path: &str) -> bool {
+    git(Path::new(repo), &["check-ignore", "-q", "--", path]).is_ok()
 }
 
 #[cfg(test)]
@@ -200,6 +219,33 @@ mod tests {
             git_show_head(&changes.repo, "no/such/file.txt").unwrap(),
             ""
         );
+    }
+
+    #[test]
+    fn an_ignored_file_has_no_head_but_an_untracked_one_is_empty() {
+        let dir = std::env::temp_dir().join(format!("ift-git-ignored-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.as_path();
+        let run = |args: &[&str]| git(repo, args).unwrap();
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(repo.join(".gitignore"), ".env\nlisted.txt\n").unwrap();
+        std::fs::write(repo.join("listed.txt"), "kept\n").unwrap();
+        run(&["add", ".gitignore"]);
+        run(&["add", "-f", "listed.txt"]);
+        run(&["commit", "-q", "-m", "init"]);
+        std::fs::write(repo.join(".env"), "KEY=1\n").unwrap();
+        std::fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+        let root = repo.to_string_lossy();
+        // Ignored and not in HEAD: no base, so no gutter.
+        assert!(git_show_head(&root, ".env").is_err());
+        // Untracked: an empty base, every line added.
+        assert_eq!(git_show_head(&root, "new.txt").unwrap(), "");
+        // Tracked though .gitignore lists it: HEAD's text as usual.
+        assert_eq!(git_show_head(&root, "listed.txt").unwrap(), "kept\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
