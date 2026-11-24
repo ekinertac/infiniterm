@@ -65,6 +65,11 @@ pub(super) struct DiffView {
     /// The shown file's modification time at the last load, for the poll.
     stamp: Option<u64>,
     last_check: f64,
+    /// The list's own poll (#877): a commit, or a change to a file not on
+    /// show, leaves the shown file's mtime alone, so the list is asked for
+    /// on a thread at the git cadence. One ask at a time.
+    last_list: f64,
+    polling: bool,
     /// What a host's threads found: they send, `diff_take_answers` takes.
     /// Unused on this machine's own disk, where every step is immediate.
     answers: (Sender<DiffAnswer>, Receiver<DiffAnswer>),
@@ -85,6 +90,8 @@ enum DiffAnswer {
     Blame(Vec<infiniterm_core::git::BlameLine>),
     /// The shown file's mtime now (`None` when it could not be had).
     Stamp(Option<u64>),
+    /// The list's poll (`diff_poll_list`), for this machine's disk too.
+    Polled(Result<infiniterm_core::git::Changes, String>),
 }
 
 /// What a host diff card says until its first list arrives.
@@ -105,6 +112,8 @@ impl DiffView {
             blame: vec![],
             stamp: None,
             last_check: 0.,
+            last_list: 0.,
+            polling: false,
             answers: channel(),
             start: None,
         }
@@ -323,8 +332,54 @@ impl EditorBody {
                         self.diff_show(&rel);
                     }
                 }
+                DiffAnswer::Polled(result) => {
+                    let Some(d) = self.diff.as_mut() else { return };
+                    d.polling = false;
+                    // A failed poll keeps what is on show; Cmd+K says why.
+                    let Ok(changes) = result else { continue };
+                    if changes.repo == d.repo && changes.files == d.files {
+                        continue;
+                    }
+                    // The shown file's diff only when its own entry moved (a
+                    // commit takes it off the list): showing it again puts
+                    // the caret back at the top, which a change to another
+                    // file should not do.
+                    let entry = |files: &[ChangedFile], rel: &str| {
+                        files.iter().find(|f| f.path == rel).cloned()
+                    };
+                    let shown = d.shown.clone().filter(|rel| {
+                        changes.repo != d.repo || entry(&d.files, rel) != entry(&changes.files, rel)
+                    });
+                    self.diff_apply_changes(Ok(changes));
+                    if let Some(rel) = shown {
+                        self.diff_show(&rel);
+                    }
+                }
             }
         }
+    }
+
+    /// Asks for the changed files on a thread, every `DISK_POLL_MS` on this
+    /// machine and every `HOST_GIT_POLL_MS` on a host (as the gutter does),
+    /// one ask at a time. Not before the first list: a host card's start
+    /// is decided by that answer (`diff_apply_changes`).
+    fn diff_poll_list(&mut self, now: f64) {
+        let every = if self.source.is_local() {
+            DISK_POLL_MS
+        } else {
+            HOST_GIT_POLL_MS
+        };
+        let Some(d) = self.diff.as_mut() else { return };
+        if d.polling || d.repo.is_empty() || d.start.is_some() || now - d.last_list < every {
+            return;
+        }
+        d.last_list = now;
+        d.polling = true;
+        let (source, root, tx) = (self.source.clone(), d.root.clone(), d.answers.0.clone());
+        std::thread::spawn(move || {
+            let result = source.git_changes(&root).map_err(|e| e.to_string());
+            let _ = tx.send(DiffAnswer::Polled(result));
+        });
     }
 
     /// Shows one file's diff: HEAD's text as the original, the disk's as the
@@ -530,12 +585,14 @@ impl EditorBody {
     }
 
     /// The disk poll of a diff: the shown file changed under it, so the
-    /// list and the diff are read again (the old card did the same).
+    /// list and the diff are read again (the old card did the same). The
+    /// list also has its own poll on a thread (`diff_poll_list`, #877) for
+    /// what this one cannot see: a commit, a change to another file.
     pub(super) fn diff_idle(&mut self, now: f64) {
         let local = self.source.is_local();
-        if !local {
-            self.diff_take_answers();
-        }
+        // A host's threads and, on either side, the list's poll.
+        self.diff_take_answers();
+        self.diff_poll_list(now);
         let Some(d) = self.diff.as_mut() else { return };
         if now - d.last_check < DISK_POLL_MS {
             return;
@@ -1132,6 +1189,77 @@ mod tests {
             b.diff_list_heading().as_deref(),
             Some("2 changed  +4 −1"),
             "a.rs +2 −1 and b.txt +2"
+        );
+    }
+
+    /// Polls the body until `done`, the list's answers coming from a thread.
+    fn poll_until(b: &mut EditorBody, now: &mut f64, done: impl Fn(&EditorBody) -> bool) {
+        let stop = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(b) {
+            assert!(std::time::Instant::now() < stop, "the poll never caught up");
+            *now += DISK_POLL_MS + 1.;
+            b.idle(*now);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn list_names(b: &EditorBody) -> Vec<String> {
+        b.diff
+            .as_ref()
+            .unwrap()
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect()
+    }
+
+    fn git_in(dir: &std::path::Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    // #877: the card read the list again only when the shown file's mtime
+    // moved, so a commit (which does not touch it) left the list and the
+    // diff as they were. The list now has its own poll on a thread.
+    #[test]
+    fn a_commit_and_a_change_elsewhere_reach_the_list_and_the_shown_diff() {
+        let (root, mut b) = repo();
+        let a_rs = format!("{}/a.rs", root.display());
+        b.diff_start(Some(&a_rs), true);
+        let mut now = 0.;
+        // A new file next to it: on the list, and the caret on a.rs stays.
+        let caret = b.buffer.line_start(3);
+        b.buffer.set_cursor(caret);
+        std::fs::write(root.join("c.txt"), "c\n").unwrap();
+        poll_until(&mut b, &mut now, |b| list_names(b).len() == 3);
+        assert_eq!(list_names(&b), vec!["a.rs", "b.txt", "c.txt"]);
+        assert_eq!(
+            b.buffer.cursor(),
+            caret,
+            "another file: a.rs not shown again"
+        );
+        // a.rs committed: off the list, and its diff has no change left.
+        git_in(&root, &["commit", "-q", "-am", "second"]);
+        poll_until(&mut b, &mut now, |b| {
+            !list_names(b).contains(&"a.rs".into())
+        });
+        assert_eq!(list_names(&b), vec!["b.txt", "c.txt"]);
+        let rows = b.tree.as_ref().unwrap().rows();
+        assert_eq!(rows.len(), 2, "the list on show follows");
+        let (shown, kinds) = b.diff_state_for_test();
+        assert_eq!(shown.as_deref(), Some("a.rs"));
+        assert!(
+            kinds
+                .iter()
+                .all(|k| !matches!(k, LineKind::Added | LineKind::Removed)),
+            "the committed lines are no longer a change"
         );
     }
 }

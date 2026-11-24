@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-24
 
 - Fixed: after a file open in the editor changes on disk and that change is committed (an agent's edit and its commit, for example), the gutter goes back to showing what differs from the commit. Before, the bars marking the change stayed until "Editor: accept the changes since the file changed on disk" was run.
+- Fixed: a diff card (`ift diff`) keeps up with the repository. A commit takes the committed files off its list and out of the diff on show, and a file changed, staged or created elsewhere joins the list, within a couple of seconds (about ten for a host's files). Before, it only noticed a change to the file it was showing, and needed Cmd+K or reopening for anything else.
 
 ### 2026-11-22
 
