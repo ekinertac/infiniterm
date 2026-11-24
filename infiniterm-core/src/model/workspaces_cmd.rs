@@ -406,6 +406,25 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.effects.push(Effect::RefreshSavedWorkspaces);
         m.open_palette(Source::DeleteSavedWorkspace);
     });
+    // The hosts this Mac has joined (#891), like the saved workspaces: a
+    // pick runs `ift join` again. A remote or joined window keeps its own
+    // folder as its data dir, so the list it would read is not this Mac's.
+    r.register("join.connect", "Join: connect to host…", |m| {
+        if m.remote.is_some() {
+            m.notify("join a host from your own window");
+            return;
+        }
+        m.effects.push(Effect::RefreshJoinedHosts);
+        m.open_palette(Source::JoinedHosts);
+    });
+    r.register("join.forget", "Join: forget host…", |m| {
+        if m.remote.is_some() {
+            m.notify("forget a host from your own window");
+            return;
+        }
+        m.effects.push(Effect::RefreshJoinedHosts);
+        m.open_palette(Source::ForgetJoinedHost);
+    });
     // The last workspace stays. Asked first, because this is the one key
     // that kills several shells at once; an empty workspace goes unasked.
     r.register("workspace.close", "Workspace: close", |m| {

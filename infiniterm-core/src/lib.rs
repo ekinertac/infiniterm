@@ -113,6 +113,7 @@ pub mod itermcolors;
 // Windows job objects, used by the pane backend and by main to make a
 // process tree die with its owner. The file is `#![cfg(windows)]`.
 pub mod job;
+pub mod joined_hosts;
 pub mod jsonc;
 pub mod jsonctx;
 pub mod keymap;
