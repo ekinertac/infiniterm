@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-24
+
+- Fixed: after a file open in the editor changes on disk and that change is committed (an agent's edit and its commit, for example), the gutter goes back to showing what differs from the commit. Before, the bars marking the change stayed until "Editor: accept the changes since the file changed on disk" was run.
+
 ### 2026-11-22
 
 - A terminal card opened while the window is minimised (by `ift` or from the phone) starts its shell at once, instead of waiting for the window to come back; the phone no longer shows "starting on the Mac" meanwhile.

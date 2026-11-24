@@ -3902,8 +3902,17 @@ impl EditorBody {
     /// Takes HEAD's text, and drops the gutter's cache when it is not the
     /// text the marks were made from (a commit moves HEAD without touching
     /// the buffer, so the version the cache is keyed by does not change).
+    ///
+    /// A HEAD that moved for this file (a commit, a checkout, a pull) counts
+    /// as accepting the review of a change on disk (#875): the gutter goes
+    /// back to "differs from HEAD", where an agent's edit followed by its
+    /// commit left the review bars standing until "accept" was run. The
+    /// first answer (`None` before it) and a vanished repo are not a move.
     fn set_git_head(&mut self, head: Option<String>) {
         if self.git_head != head {
+            if self.git_head.is_some() && head.is_some() {
+                self.agent_base = None;
+            }
             self.git_head = head;
             self.gutter.0 = u64::MAX;
         }
@@ -6297,6 +6306,35 @@ mod tests {
         b.change_revert_all(6.);
         assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
         assert!(b.agent_base.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // #875: an agent edits a file and commits it; the review bars went only
+    // on "accept". A moved HEAD now accepts, the first HEAD does not.
+    #[test]
+    fn a_commit_of_the_reviewed_change_ends_the_review() {
+        let dir = std::env::temp_dir().join(format!("ift-editor-commit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.txt").to_string_lossy().to_string();
+        std::fs::write(&path, "a\nb\n").unwrap();
+        let mut b = body();
+        b.load(&path, false, 0.);
+        // The first HEAD arrives during a review: not a move, it stays.
+        b.apply_disk_text(&path, "a\nB\n".into(), 1.);
+        b.set_git_head(Some("a\nb\n".into()));
+        assert!(b.agent_base.is_some(), "the first HEAD is not a commit");
+        // The same HEAD again (a poll with nothing new) keeps it too.
+        b.set_git_head(Some("a\nb\n".into()));
+        assert!(b.agent_base.is_some());
+        // The repo gone: no gutter, but nothing was accepted.
+        b.set_git_head(None);
+        assert!(b.agent_base.is_some());
+        b.set_git_head(Some("a\nb\n".into()));
+        // The change is committed: HEAD moves, the gutter is HEAD's again.
+        b.set_git_head(Some("a\nB\n".into()));
+        assert!(b.agent_base.is_none());
+        let (marks, deleted) = b.gutter_for();
+        assert!(marks.iter().all(|m| *m == GutterMark::Clean) && deleted.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
