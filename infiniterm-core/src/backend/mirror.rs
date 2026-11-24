@@ -13,17 +13,29 @@
 //! Pure: no socket, no gpui. Used by relay.rs. The host's own `Grid`
 //! (infiniterm-term) is not shared on purpose: it lives on the ui thread and the
 //! relay is fed from the daemon's reader threads.
+//!
+//! A quiet mirror's history goes to the compact store (`cold_history.rs`,
+//! #887): every session has a mirror whether or not anyone joins, and
+//! alacritty gives each its thousand rows at full width as soon as one line
+//! scrolls. Everything that reads or changes history warms it first.
 
+use crate::cold_history::ColdHistory;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
+use std::time::{Duration, Instant};
 
 /// Lines kept above the screen. Smaller than the host's own scrollback: this is
 /// a second copy per session, and a phone does not need ten thousand lines.
 pub const MIRROR_HISTORY: usize = 1000;
+
+/// How long a mirror is fed nothing before its history goes cold: the same
+/// half minute as the card's own terminal (`infiniterm_term::grid::QUIET_MS`),
+/// for the same reason.
+pub const MIRROR_QUIET: Duration = Duration::from_secs(30);
 
 /// The replies a program waits for (a cursor position, a colour) belong to the
 /// host's terminal. The mirror answers nobody.
@@ -54,6 +66,12 @@ impl Dimensions for Size {
 pub struct Mirror {
     term: Term<Mute>,
     processor: Processor,
+    /// The history while nothing is being fed; empty otherwise.
+    cold: ColdHistory,
+    /// Fed, resized or read since `rest` last looked.
+    touched: bool,
+    /// When `rest` first saw nothing new.
+    quiet_since: Instant,
 }
 
 impl Mirror {
@@ -65,14 +83,36 @@ impl Mirror {
         Mirror {
             term: Term::new(config, &size(cols, rows), Mute),
             processor: Processor::new(),
+            cold: ColdHistory::default(),
+            touched: true,
+            quiet_since: Instant::now(),
         }
     }
 
+    /// The history back, before anything that reads or changes it.
+    fn wake(&mut self) {
+        self.touched = true;
+        self.cold.warm(&mut self.term, MIRROR_HISTORY);
+    }
+
+    /// Called now and then: moves the history to the compact store once the
+    /// mirror has been quiet for `MIRROR_QUIET`. True when it moved.
+    pub fn rest(&mut self, now: Instant) -> bool {
+        if std::mem::take(&mut self.touched) {
+            self.quiet_since = now;
+            return false;
+        }
+        now.duration_since(self.quiet_since) >= MIRROR_QUIET
+            && self.cold.cool(&mut self.term, MIRROR_HISTORY)
+    }
+
     pub fn advance(&mut self, bytes: &[u8]) {
+        self.wake();
         self.processor.advance(&mut self.term, bytes);
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.wake();
         self.term.resize(size(cols, rows));
     }
 
@@ -94,6 +134,7 @@ impl Mirror {
     /// it and back, and the alternate screen is written back into the mirror
     /// after the swap (entering it clears it).
     pub fn snapshot(&mut self) -> Vec<u8> {
+        self.wake();
         let mode = *self.term.mode();
         let alt = mode.contains(TermMode::ALT_SCREEN);
 
@@ -516,6 +557,42 @@ mod tests {
         assert!(text(&viewer).contains("history 0"));
         assert!(text(&viewer).contains("$ vim"));
         assert_eq!(viewer.term.grid().cursor.point, m.term.grid().cursor.point);
+    }
+
+    #[test]
+    fn a_viewer_of_a_mirror_that_rested_gets_the_same_bytes() {
+        let feed: &[&[u8]] = &[
+            b"",
+            b"\x1b[31mmore\x1b[0m\r\n",
+            b"\x1b[?1049h\x1b[2Jvim",
+            b"\x1b[H\x1b[2J\x1b[3J$ ",
+        ];
+        for after in feed {
+            for new_size in [None, Some((33u16, 9u16)), Some((12, 3))] {
+                let (mut stock, mut rested) = (Mirror::new(20, 5), Mirror::new(20, 5));
+                for m in [&mut stock, &mut rested] {
+                    for i in 0..300 {
+                        m.advance(format!("\x1b[3{}mhistory {i}\x1b[0m\r\n", i % 8).as_bytes());
+                    }
+                }
+                let t = Instant::now();
+                assert!(!rested.rest(t), "just fed");
+                assert!(!rested.rest(t + MIRROR_QUIET / 2));
+                assert!(rested.rest(t + MIRROR_QUIET));
+                assert_eq!(rested.term.history_size(), 0, "the rows left alacritty");
+                for m in [&mut stock, &mut rested] {
+                    if !after.is_empty() {
+                        m.advance(after);
+                    }
+                    if let Some((c, r)) = new_size {
+                        m.resize(c, r);
+                    }
+                }
+                assert_eq!(rested.snapshot(), stock.snapshot());
+                // Read by a viewer: warm again, and quiet from now on.
+                assert!(!rested.rest(t + MIRROR_QUIET * 2));
+            }
+        }
     }
 
     #[test]

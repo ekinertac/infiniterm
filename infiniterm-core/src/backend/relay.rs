@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::time::Instant;
 
 use super::mirror::Mirror;
 use super::session_protocol::{Frame, MAX_PAYLOAD};
@@ -181,6 +182,14 @@ impl Relay {
         self.sessions.remove(id);
     }
 
+    /// Moves one quiet mirror's history to its compact store; true when it
+    /// did, so the caller can let go of the relay between them (a mirror
+    /// takes a fraction of a millisecond, and the readers wait meanwhile).
+    /// Nothing while the relay is off.
+    pub fn rest(&mut self, now: Instant) -> bool {
+        self.enabled && self.sessions.values_mut().any(|s| s.mirror.rest(now))
+    }
+
     /// How many viewers are joined to a session right now.
     pub fn viewers(&self, id: &str) -> usize {
         self.sessions.get(id).map_or(0, |s| s.viewers.len())
@@ -245,6 +254,43 @@ mod tests {
         let text = String::from_utf8_lossy(&replay);
         assert!(text.contains("history 0\r\n"), "the oldest line is there");
         assert!(text.contains("history 199"));
+    }
+
+    #[test]
+    fn a_quiet_session_rests_and_a_viewer_still_gets_its_scrollback() {
+        use crate::backend::mirror::MIRROR_QUIET;
+        let mut r = Relay::new();
+        for id in ["a", "b"] {
+            r.open(id, hello());
+            for i in 0..200 {
+                r.publish(id, format!("history {i}\r\n").as_bytes());
+            }
+        }
+        let t = Instant::now();
+        assert!(!r.rest(t), "both just printed");
+        // Off, nothing happens; back on, it goes on as before.
+        r.set_enabled(false);
+        assert!(!r.rest(t + MIRROR_QUIET));
+        r.set_enabled(true);
+        assert!(r.rest(t + MIRROR_QUIET), "one");
+        assert!(r.rest(t + MIRROR_QUIET), "the other");
+        assert!(!r.rest(t + MIRROR_QUIET), "both are cold");
+        for id in ["a", "b"] {
+            let rx = r.subscribe(id).unwrap();
+            r.publish(id, b"live");
+            let frames = drain(&rx);
+            let replay: Vec<u8> = frames
+                .iter()
+                .filter_map(|f| match f {
+                    Frame::Replay(b) => Some(b.clone()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let text = String::from_utf8_lossy(&replay);
+            assert!(text.contains("history 0\r\n") && text.contains("history 199"));
+            assert_eq!(frames.last(), Some(&Frame::Data(b"live".to_vec())));
+        }
     }
 
     #[test]

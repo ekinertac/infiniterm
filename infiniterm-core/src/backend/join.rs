@@ -279,6 +279,24 @@ pub struct JoinHub {
     restart_unsent: Arc<AtomicUsize>,
 }
 
+/// How often the mirrors are looked at for one that has gone quiet. Coarse:
+/// a mirror is due once, half a minute after its session last printed.
+const REST_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Quiet mirrors give up their rows (`Relay::rest`) for as long as the relay
+/// lives. A thread here and not a timer in the app, because `ift serve` and
+/// the Windows host have hubs too. The lock is let go between two mirrors.
+fn rest_mirrors(relay: &Arc<Mutex<Relay>>) {
+    let relay = Arc::downgrade(relay);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(REST_EVERY);
+        let Some(relay) = relay.upgrade() else {
+            return;
+        };
+        while relay.lock().unwrap().rest(std::time::Instant::now()) {}
+    });
+}
+
 impl JoinHub {
     pub fn new(relay: Arc<Mutex<Relay>>, write: WriteSession) -> JoinHub {
         // A hub exists only when a server will run, and the Windows local
@@ -287,6 +305,7 @@ impl JoinHub {
         // viewer waited at "starting on the host" for ever (found on the
         // first real join of a Windows host, 2026-11-13).
         relay.lock().unwrap().set_enabled(true);
+        rest_mirrors(&relay);
         let (updates_tx, updates_rx) = std::sync::mpsc::channel();
         let (opens_tx, opens_rx) = std::sync::mpsc::channel();
         JoinHub {
