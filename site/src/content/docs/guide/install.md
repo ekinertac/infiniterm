@@ -39,6 +39,15 @@ The app is signed and notarized, so Gatekeeper opens it without a warning, and i
 
 On Windows `ift` already works inside every card, with no setup: the app puts its own folder first on that card's `PATH` when the card starts. Your own `PATH` and the registry are not changed. To run `ift` in a terminal outside the app, add the app's folder to your `PATH` yourself; `ift install` prints which folder.
 
+## Windows (experimental)
+
+There is a Windows download for people who want to try it. Windows is experimental and not a supported platform: infiniterm is macOS only for now.
+
+1. Download the zip with `x86_64` in its name from the [latest release](https://github.com/ekinertac/infiniterm/releases/latest). The zip with `arm64` in its name is for the Mac.
+2. Unzip it and run `infiniterm.exe`.
+3. The build is not signed, so Windows SmartScreen warns on the first run. Choose "More info", then "Run anyway".
+
+It was tested on Windows 11 only. It does not update itself: download the next zip to update. It needs no Visual C++ Redistributable. There is no browser card yet; a browser card says so. `ift serve` does not run on Windows. A Mac can join the app's terminal cards with `ift join <host> --ift C:/path/ift.exe`, see [Servers](../servers/#joining-a-canvas-that-already-exists).
 ## Build from source
 
 The source is public. You need Rust; the README has the steps. Builds are yours to use, not to hand to anyone else.
