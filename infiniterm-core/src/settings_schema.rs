@@ -491,9 +491,17 @@ mod tests {
             let Choice(words) = kind else { continue };
             for word in *words {
                 let config = merge_config(&json!({ *key: word }));
+                // Windows takes every Win chord first, so `super` reads as
+                // `ctrl` there (`config::CommandModifier`).
+                let expected =
+                    if cfg!(windows) && *key == "keyboard.commandModifier" && *word == "super" {
+                        "ctrl"
+                    } else {
+                        word
+                    };
                 assert_eq!(
                     value_at(&config, key),
-                    json!(word),
+                    json!(expected),
                     "{key}: {word:?} did not stick"
                 );
             }

@@ -391,7 +391,9 @@ mod tests {
         // Styles by turns are: eight colours, one cell each.
         let mut t = T::new(10, 40);
         for r in 0..200 {
-            let line: String = (0..40).map(|c| format!("\x1b[3{}mx", (r + c) % 8)).collect();
+            let line: String = (0..40)
+                .map(|c| format!("\x1b[3{}mx", (r + c) % 8))
+                .collect();
             t.feed(line.as_bytes());
             t.feed(b"\r\n");
         }

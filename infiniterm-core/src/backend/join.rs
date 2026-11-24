@@ -818,6 +818,13 @@ mod tests {
         let (_missing, _) = connect(&path, "ift-join 2 session nope");
         let (_s, answer) = connect(&path, "ift-join 2 session abc");
         assert_eq!(answer, "ift-join 2 ok");
+        // The host writes the answer first and asks for the repaint after the
+        // replay is queued, so the nudge can land a moment after the answer
+        // was read: wait for it instead of reading `asked` at once.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while asked.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(*asked.lock().unwrap(), vec!["abc".to_string()]);
         let _ = std::fs::remove_file(&path);
     }
