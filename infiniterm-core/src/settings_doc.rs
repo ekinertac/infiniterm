@@ -647,8 +647,8 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "Cmd+, opens a settings window instead of this file: every setting with its",
             "value, a search field, and a reset button for the ones you changed. Edits",
             "land in settings.json at once, comments kept. Off, Cmd+, opens settings.json",
-            "beside this file. \"App: open settings.json\" in the palette opens the file",
-            "either way.",
+            "beside this file. \"App: open settings window\" and \"App: open settings.json\"",
+            "in the palette open either one, whichever way this is set.",
         ],
     ),
     (

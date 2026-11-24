@@ -1,5 +1,6 @@
 //! The settings window (#745): every settings.json key in a window of its
-//! own, opened by Cmd+, when `ui.settings` is on.
+//! own, opened by Cmd+, when `ui.settings` is on (the default) and by
+//! "App: open settings window" either way.
 //!
 //! Wiring only. What a row says, what an edit writes, what a text field's
 //! text means and what the search matches are `infiniterm_core::

@@ -402,8 +402,8 @@ pub enum Effect {
     /// An app link (`slack://...`, #668) the person said yes to: macOS opens
     /// the app registered for its scheme.
     OpenAppLink(String),
-    /// `app.settings` with `ui.settings` on (#745): the ui opens the settings
-    /// window, or brings the open one forward.
+    /// `app.settings` with `ui.settings` on (#745), or `app.settings.window`
+    /// (#885): the ui opens the settings window, or brings the open one forward.
     OpenSettingsWindow,
     /// Written into settings.json through `patch_json_text`.
     SaveSetting {

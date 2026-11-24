@@ -89,6 +89,16 @@ impl Model {
         self.notify(format!("interface {}%", (self.ui_scale * 100.).round()));
     }
 
+    /// The settings window (#745), or the files in a joined window: its
+    /// settings are the host's, and the window is out of scope for viewers.
+    pub fn open_settings_window(&mut self) {
+        if self.read_only && self.snapshot_seen {
+            self.open_config_pair(false);
+        } else {
+            self.effects.push(Effect::OpenSettingsWindow);
+        }
+    }
+
     /// The config files open in the app's own editors, as a pair: the
     /// generated defaults on the left, read-only, and your overrides on the
     /// right. A file already open on this workspace is reused. Remembered as
@@ -373,15 +383,20 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("ui.scale.reset", "App: interface at 100%", |m| {
         m.set_ui_scale(1.)
     });
-    // With `ui.settings` on, Cmd+, opens the settings window (#745). A joined
-    // window keeps the files: its settings are the host's, and the window is
-    // out of scope for viewers.
+    // With `ui.settings` on (the default since #885), Cmd+, opens the
+    // settings window (#745). A joined window keeps the files: its settings
+    // are the host's, and the window is out of scope for viewers.
     r.register("app.settings", "App: open settings", |m| {
-        if m.config.ui.settings && !(m.read_only && m.snapshot_seen) {
-            m.effects.push(Effect::OpenSettingsWindow);
+        if m.config.ui.settings {
+            m.open_settings_window();
         } else {
             m.open_config_pair(false);
         }
+    });
+    // The window stays one command away with `ui.settings` off, as the file
+    // does with it on (#885).
+    r.register("app.settings.window", "App: open settings window", |m| {
+        m.open_settings_window()
     });
     // The file stays one command away whichever way Cmd+, goes, so the
     // window never hides it (and nothing is mouse-only).
