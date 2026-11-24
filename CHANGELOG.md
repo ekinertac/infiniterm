@@ -9,7 +9,6 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-24
 
 - The app uses much less memory when most of your terminals are quiet. A terminal that has printed nothing for 30 seconds keeps its scrollback in a compact form and gets it back, unchanged, as soon as it prints, or you scroll, search or select in it. With 27 terminals of 4,000 lines each, memory went from about 990 MB to 380 MB. The scrollback length is the same as before.
-
 - Fixed: a file git ignores (a `.env`, build output) no longer shows a green "added" bar on every line in the editor's gutter. It gets no gutter, like a file outside any repository.
 - Fixed: after a file open in the editor changes on disk and that change is committed (an agent's edit and its commit, for example), the gutter goes back to showing what differs from the commit. Before, the bars marking the change stayed until "Editor: accept the changes since the file changed on disk" was run.
 - Fixed: a diff card (`ift diff`) keeps up with the repository. A commit takes the committed files off its list and out of the diff on show, and a file changed, staged or created elsewhere joins the list, within a couple of seconds (about ten for a host's files). Before, it only noticed a change to the file it was showing, and needed Cmd+K or reopening for anything else.
