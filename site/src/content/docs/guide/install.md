@@ -48,6 +48,17 @@ There is a Windows download for people who want to try it. Windows is experiment
 3. The build is not signed, so Windows SmartScreen warns on the first run. Choose "More info", then "Run anyway".
 
 It was tested on Windows 11 only. It does not update itself: download the next zip to update. It needs no Visual C++ Redistributable. There is no browser card yet; a browser card says so. `ift serve` does not run on Windows. A Mac can join the app's terminal cards with `ift join <host> --ift C:/path/ift.exe`, see [Servers](../servers/#joining-a-canvas-that-already-exists).
+
+## Linux (experimental)
+
+Linux is experimental and not a supported platform yet. The installer works on Ubuntu 24.04 on x86_64, where it was run:
+
+```sh
+curl -fsSL https://infiniterm.app/install.sh | sh
+```
+
+The desktop app has only been tried on a machine with no screen. Expect gaps: Wayland, a real graphics card, input methods and the clipboard are untested, there is no browser card, and the build is not signed. A stock Ubuntu desktop lacks one library, `libxkbcommon-x11-0`. The installer names it and prints the `sudo apt install` line that adds it. To update, run the installer again. An arm64 build is on the release, but nobody has installed it yet.
+
 ## Build from source
 
 The source is public. You need Rust; the README has the steps. Builds are yours to use, not to hand to anyone else.
