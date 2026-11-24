@@ -110,6 +110,7 @@ impl AppView {
             uplink: None,
             #[cfg(unix)]
             host_drops: std::sync::mpsc::channel(),
+            join_results: std::sync::mpsc::channel(),
             viewer: false,
             viewer_poke: false,
             #[cfg(unix)]
@@ -601,6 +602,21 @@ impl AppView {
                         Err(e) => self.model.notify(e),
                     }
                     self.model.saved_workspace_names = infiniterm_core::saved_workspace::list(&dir);
+                    self.redraw = true;
+                }
+                // The hosts this Mac has joined (#891): the viewer folders
+                // `ift join` makes, so the list is read where it writes them.
+                Effect::RefreshJoinedHosts => {
+                    self.model.joined_hosts = infiniterm_core::joined_hosts::list(&joins_root());
+                }
+                Effect::JoinHost(args) => self.join_host(args),
+                Effect::ForgetJoinedHost(folder) => {
+                    let root = joins_root();
+                    match infiniterm_core::joined_hosts::forget(&root, &folder) {
+                        Ok(()) => self.model.notify(format!("forgot {folder}")),
+                        Err(e) => self.model.notify(e),
+                    }
+                    self.model.joined_hosts = infiniterm_core::joined_hosts::list(&root);
                     self.redraw = true;
                 }
                 // "Git: switch branch…" (#750). On the UI thread like Go to
@@ -1185,6 +1201,41 @@ impl AppView {
         });
     }
 
+    /// A host picked from "Join: connect to host…" (#891): the bundled `ift
+    /// join` with the flags it was joined with, exactly as if typed. It waits
+    /// on ssh (and on a password dialog through `ift askpass`, since it has
+    /// no terminal), so it runs on a thread and its last line comes back
+    /// through `join_results` for the status bar.
+    #[cfg(unix)]
+    fn join_host(&mut self, args: Vec<String>) {
+        let tx = self.join_results.0.clone();
+        let ift = bundled_ift();
+        std::thread::spawn(move || {
+            let out = std::process::Command::new(&ift)
+                .arg("join")
+                .args(&args)
+                .stdin(std::process::Stdio::null())
+                .output();
+            let _ = tx.send(join_outcome(out));
+        });
+    }
+
+    #[cfg(windows)]
+    fn join_host(&mut self, _args: Vec<String>) {
+        self.model.notify("ift join needs a Mac or Linux machine");
+    }
+
+    /// Joins that ended: what `ift join` said last, shown as a status.
+    /// True when something was shown.
+    pub fn drain_join_results(&mut self) -> bool {
+        let mut shown = false;
+        while let Ok(line) = self.join_results.1.try_recv() {
+            self.model.notify(line);
+            shown = true;
+        }
+        shown
+    }
+
     /// Transfers that ended: the host's paths are typed into the card the
     /// way a local drop's are (quoted, one line), or the reason is shown.
     #[cfg(windows)]
@@ -1575,6 +1626,38 @@ fn start_join(app: &mut AppView) {
     }
     // Viewers that join before the first save still get a canvas.
     app.write_layout();
+}
+
+/// Where `ift join` keeps its viewer folders, read with the same rule it
+/// writes them by (#891): under `INFINITERM_DATA_DIR` for a scratch run.
+fn joins_root() -> PathBuf {
+    let data = std::env::var_os("INFINITERM_DATA_DIR").map(PathBuf::from);
+    infiniterm_core::joined_hosts::joins_root(data.as_deref(), &home_dir())
+}
+
+/// The `ift` beside this binary (`tools/bundle.sh` puts it there), else the
+/// one on PATH. `ift join` itself needs the one inside the bundle to find
+/// the app it opens.
+#[cfg(unix)]
+fn bundled_ift() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("ift")))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from("ift"))
+}
+
+/// The status line for a finished `ift join` run.
+#[cfg(unix)]
+fn join_outcome(out: std::io::Result<std::process::Output>) -> String {
+    match out {
+        Ok(o) => infiniterm_core::joined_hosts::outcome_line(
+            o.status.success(),
+            &String::from_utf8_lossy(&o.stdout),
+            &String::from_utf8_lossy(&o.stderr),
+        ),
+        Err(e) => format!("could not run ift join: {e}"),
+    }
 }
 
 pub fn startup(app: &mut AppView) {

@@ -643,6 +643,11 @@ impl Model {
                     self.effects.push(Effect::DeleteSavedWorkspaceFile(name));
                 }
             }
+            Pending::ForgetJoinedHost(folder) => {
+                if text.is_some() {
+                    self.effects.push(Effect::ForgetJoinedHost(folder));
+                }
+            }
             Pending::CloseWorkspace(id) => {
                 if text.is_some() {
                     self.close_workspace_confirmed(&id);
@@ -1459,6 +1464,25 @@ impl Model {
                     &format!("Delete the saved workspace \"{id}\"?"),
                     "Delete",
                     Pending::DeleteSavedWorkspace(id.to_string()),
+                );
+            }
+            Source::JoinedHosts => {
+                if let Some(h) = self.joined_hosts.iter().find(|h| h.folder == id).cloned() {
+                    self.notify(format!("joining {}...", h.label()));
+                    self.effects.push(Effect::JoinHost(h.record.args()));
+                }
+            }
+            // Asked first: the window's place and colour go with the folder.
+            Source::ForgetJoinedHost => {
+                let label = self
+                    .joined_hosts
+                    .iter()
+                    .find(|h| h.folder == id)
+                    .map_or(id, |h| h.label());
+                self.prompt.confirm(
+                    &format!("Forget the joined host \"{label}\"?"),
+                    "Forget",
+                    Pending::ForgetJoinedHost(id.to_string()),
                 );
             }
             Source::WindowColor => self.window_color_run(id),

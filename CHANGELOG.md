@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-25
+
+- The palette lists the hosts you have joined: "Join: connect to host…" shows every host `ift join` has reached, the last joined first, and joins the one you pick, as if you had typed `ift join` with the same options. "Join: forget host…" takes one off the list. Neither has a key; bind `join.connect` or `join.forget` in keybindings.json for one. A host joined before this version is listed by its folder name until you join it once more.
+
 ### 2026-11-24
 
 - Fixed on Windows: the editor's file tree now shows git marks (modified, new, ignored). Windows paths use backslashes and matched none of git's rows, so the tree never showed any.

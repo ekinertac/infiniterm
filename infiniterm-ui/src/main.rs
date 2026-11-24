@@ -385,6 +385,12 @@ pub struct AppView {
         std::sync::mpsc::Sender<crate::runtime::HostDrop>,
         std::sync::mpsc::Receiver<crate::runtime::HostDrop>,
     ),
+    /// What each `ift join` run from the palette said last (#891): the run
+    /// waits on ssh on a thread and answers here; the poll shows it.
+    pub join_results: (
+        std::sync::mpsc::Sender<String>,
+        std::sync::mpsc::Receiver<String>,
+    ),
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
     pub viewer: bool,
@@ -848,7 +854,11 @@ fn main() {
                         // What viewers changed on this canvas (#423).
                         // Files a joined window sent to the host (#556).
                         this.drain_host_drops();
-                        if this.apply_remote_opens() | this.apply_remote_updates() {
+                        // Palette joins that ended (#891).
+                        if this.apply_remote_opens()
+                            | this.apply_remote_updates()
+                            | this.drain_join_results()
+                        {
                             this.redraw = true;
                             cx.notify();
                         }

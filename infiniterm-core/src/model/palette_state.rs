@@ -34,6 +34,12 @@ pub enum Source {
     /// `workspace.deleteSaved` (#796): the same rows; a pick asks, then
     /// deletes that file.
     DeleteSavedWorkspace,
+    /// `join.connect` (#891): the hosts this Mac has joined; a pick runs
+    /// `ift join` for it again.
+    JoinedHosts,
+    /// `join.forget` (#891): the same rows; a pick asks, then removes that
+    /// host's viewer folder.
+    ForgetJoinedHost,
     /// `window.color` (#157, #160): named colours previewed live, then a hex code.
     WindowColor,
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
@@ -90,6 +96,8 @@ impl Source {
             Source::MoveGroupTo => "moveGroupTo",
             Source::SavedWorkspaces => "savedWorkspaces",
             Source::DeleteSavedWorkspace => "deleteSavedWorkspace",
+            Source::JoinedHosts => "joinedHosts",
+            Source::ForgetJoinedHost => "forgetJoinedHost",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
             Source::MoveTab => "moveTab",
@@ -165,6 +173,8 @@ impl Source {
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::SavedWorkspaces => "Open a saved workspace…",
             Source::DeleteSavedWorkspace => "Delete a saved workspace…",
+            Source::JoinedHosts => "Join a host…",
+            Source::ForgetJoinedHost => "Forget a joined host…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
             Source::MoveTab => "Move the tab to card…",
@@ -680,6 +690,18 @@ impl Model {
                     id: name.clone(),
                     label: name.clone(),
                     hint: None,
+                })
+                .collect(),
+            // The joined hosts, the last joined first (`joined_hosts::list`).
+            // The id is the viewer folder; the hint is the host when a name
+            // stands in for it.
+            Source::JoinedHosts | Source::ForgetJoinedHost => self
+                .joined_hosts
+                .iter()
+                .map(|h| PaletteItem {
+                    id: h.folder.clone(),
+                    label: h.label().to_string(),
+                    hint: (h.label() != h.record.host).then(|| h.record.host.clone()),
                 })
                 .collect(),
             // Sizes as fractions of the default card, from the card's own

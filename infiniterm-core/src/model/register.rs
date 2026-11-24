@@ -4794,6 +4794,84 @@ mod tests {
         }
     }
 
+    fn joined(folder: &str, host: &str, name: Option<&str>) -> crate::joined_hosts::JoinedHost {
+        crate::joined_hosts::JoinedHost {
+            folder: folder.into(),
+            record: crate::joined_hosts::JoinRecord {
+                host: host.into(),
+                name: name.map(Into::into),
+                ..Default::default()
+            },
+        }
+    }
+
+    // #891: the hosts joined before, by name with the host as the hint when
+    // a name stands in; a pick runs `ift join` with the flags they had.
+    #[test]
+    fn the_joined_hosts_are_listed_and_a_pick_joins_again() {
+        let mut h = Harness::new();
+        let effects = h.run("join.connect");
+        assert!(effects.contains(&Effect::RefreshJoinedHosts));
+        assert_eq!(h.m.palette.source, Some(Source::JoinedHosts));
+        h.m.joined_hosts = vec![
+            joined("cg-dev", "cg-dev", None),
+            joined("me-mini", "me@mini", Some("Mini")),
+        ];
+        let rows = h.m.palette_items(Source::JoinedHosts, &[]);
+        let shown: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.label.as_str(), r.hint.as_deref()))
+            .collect();
+        assert_eq!(shown, [("cg-dev", None), ("Mini", Some("me@mini"))]);
+        h.m.palette_run(Source::JoinedHosts, "me-mini");
+        assert!(h.m.take_effects().contains(&Effect::JoinHost(vec![
+            "me@mini".into(),
+            "--name".into(),
+            "Mini".into()
+        ])));
+    }
+
+    // A remote or joined window's data dir is its own folder, so it has no
+    // list of this Mac's hosts to show.
+    #[test]
+    fn a_remote_window_does_not_list_joined_hosts() {
+        let mut h = Harness::new();
+        h.m.remote = Some(crate::remote_identity::RemoteIdentity {
+            target: "me@mini".into(),
+            name: "mini".into(),
+            color: (0, 0, 0),
+        });
+        for id in ["join.connect", "join.forget"] {
+            let effects = h.run(id);
+            assert!(!effects.contains(&Effect::RefreshJoinedHosts), "{id}");
+            assert_eq!(h.m.palette.source, None, "{id}");
+        }
+    }
+
+    #[test]
+    fn forgetting_a_joined_host_asks_first() {
+        let mut h = Harness::new();
+        h.m.joined_hosts = vec![joined("cg-dev", "cg-dev", None)];
+        for (answer, forgot) in [
+            (None, vec![]),
+            (Some(""), vec![Effect::ForgetJoinedHost("cg-dev".into())]),
+        ] {
+            let effects = h.run("join.forget");
+            assert!(effects.contains(&Effect::RefreshJoinedHosts));
+            h.m.palette_run(Source::ForgetJoinedHost, "cg-dev");
+            assert!(h.m.prompt.confirm, "a yes or no question");
+            let (pending, text) = h.m.prompt.settle(answer).unwrap();
+            assert_eq!(pending, Pending::ForgetJoinedHost("cg-dev".into()));
+            h.m.answer(pending, text, |_| false);
+            let effects: Vec<Effect> =
+                h.m.take_effects()
+                    .into_iter()
+                    .filter(|e| matches!(e, Effect::ForgetJoinedHost(_)))
+                    .collect();
+            assert_eq!(effects, forgot);
+        }
+    }
+
     #[test]
     fn a_workspace_saved_under_no_name_is_not_saved() {
         let mut h = Harness::new();
