@@ -62,6 +62,13 @@ $tag = "v$version"
 # `cargo clean -p` on the one crate that reads it, because `option_env!` is
 # baked at compile time and cargo does not know the variable changed.
 $env:INFINITERM_BUILD = $build
+# Link the C runtime into the exes. Measured 2026-11-23 on the first zip: all
+# three imported VCRUNTIME140.dll, which a fresh Windows 11 may not have (it
+# comes with the Visual C++ Redistributable), and the exes then fail to start
+# with a missing-DLL error. A few hundred KB per exe buys a zip that runs on a
+# stock machine. Set here and not in .cargo/config.toml, so a developer's own
+# builds are left as they were.
+$env:RUSTFLAGS = ("$env:RUSTFLAGS -C target-feature=+crt-static").Trim()
 cargo clean -p infiniterm-ui
 cargo build --release -p infiniterm-ui
 if ($LASTEXITCODE -ne 0) { throw "dist: building the app failed" }
