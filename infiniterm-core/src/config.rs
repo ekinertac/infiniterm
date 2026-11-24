@@ -460,7 +460,7 @@ pub struct Ui {
     /// (#746); off unless asked for.
     pub switcher_state_colors: bool,
     /// `app.settings` (Cmd+,) opens the settings window instead of
-    /// settings.json beside the defaults (#745); off unless asked for.
+    /// settings.json beside the defaults (#745); on unless turned off (#885).
     pub settings: bool,
     /// A colour for the title bar and the Dock icon: a name from the picker or
     /// a hex code, empty for none (#160). A remote instance wears its host's.
@@ -746,7 +746,7 @@ pub fn default_config() -> Config {
             background_image_fade: 2.,
             workspace_isolation: false,
             switcher_state_colors: false,
-            settings: false,
+            settings: true,
             window_color: String::new(),
             card_opacity: 1.,
             card_gradient: Vec::new(),
@@ -2038,9 +2038,9 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_window_is_off_unless_asked_for() {
-        assert!(!m(json!({})).ui.settings);
-        assert!(m(json!({"ui.settings": true})).ui.settings);
+    fn the_settings_window_is_on_unless_turned_off() {
+        assert!(m(json!({})).ui.settings);
+        assert!(!m(json!({"ui.settings": false})).ui.settings);
     }
 
     #[test]

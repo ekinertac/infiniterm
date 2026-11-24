@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-24
 
+- The settings window is on by default: Cmd+, opens it instead of settings.json. Set `ui.settings` to `false` to have Cmd+, open the file again. The palette has "App: open settings window" and "App: open settings.json", so either one is a command away whichever way it is set.
 - Fixed: a file git ignores (a `.env`, build output) no longer shows a green "added" bar on every line in the editor's gutter. It gets no gutter, like a file outside any repository.
 - Fixed: after a file open in the editor changes on disk and that change is committed (an agent's edit and its commit, for example), the gutter goes back to showing what differs from the commit. Before, the bars marking the change stayed until "Editor: accept the changes since the file changed on disk" was run.
 - Fixed: a diff card (`ift diff`) keeps up with the repository. A commit takes the committed files off its list and out of the diff on show, and a file changed, staged or created elsewhere joins the list, within a couple of seconds (about ten for a host's files). Before, it only noticed a change to the file it was showing, and needed Cmd+K or reopening for anything else.
