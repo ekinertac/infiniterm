@@ -84,9 +84,15 @@ pub fn git_changes(path: &str) -> Result<Changes, String> {
         .unwrap_or_default();
     let mut files: Vec<ChangedFile> = Vec::new();
 
+    // `--no-optional-locks` on both (#893): the diff card runs this every
+    // 2 s on a thread (#878), and a `diff` or `status` that refreshes the
+    // index takes `.git/index.lock`, so a `git commit` or `git add` the user
+    // ran at that moment failed with "index.lock: File exists". The same
+    // reason `git_tree_status::status` passes it.
     let numstat = git(
         &repo,
         &[
+            "--no-optional-locks",
             "diff",
             "--numstat",
             "HEAD",
@@ -97,6 +103,7 @@ pub fn git_changes(path: &str) -> Result<Changes, String> {
     let status = git(
         &repo,
         &[
+            "--no-optional-locks",
             "status",
             "--porcelain",
             "--",

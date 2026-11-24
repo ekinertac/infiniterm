@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-25
 
+- Fixed: with a diff card open, a `git commit` or `git add` in that repository could fail now and then with "index.lock: File exists". The diff card's background check no longer locks the repository.
+
 - The palette lists the hosts you have joined: "Join: connect to host…" shows every host `ift join` has reached, the last joined first, and joins the one you pick, as if you had typed `ift join` with the same options. "Join: forget host…" takes one off the list. Neither has a key; bind `join.connect` or `join.forget` in keybindings.json for one. A host joined before this version is listed by its folder name until you join it once more.
 
 ### 2026-11-24
