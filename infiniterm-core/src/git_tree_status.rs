@@ -148,6 +148,7 @@ impl TreeStatus {
     /// The mark for an absolute path in the tree, `None` for a clean path
     /// or one outside the repository.
     pub fn mark_for(&self, abs_path: &str, is_dir: bool) -> Option<RowMark> {
+        let abs_path = slashed(abs_path);
         let rel = abs_path
             .strip_prefix(self.root.as_str())?
             .strip_prefix('/')?
@@ -179,6 +180,18 @@ impl TreeStatus {
     }
 }
 
+/// A path in the one spelling this module compares: forward slashes. Git
+/// prints them on every platform, and a Windows tree asks with backslashes
+/// (`C:\a\b`), which matched no row, so the tree showed no git marks there.
+/// Only Windows converts: on unix a backslash is a legal file name character.
+fn slashed(path: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) {
+        std::borrow::Cow::Owned(path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    }
+}
+
 /// Runs git for the repository `dir` is in. Blocks: call it on a thread.
 /// The root is spelled as the tree spells it: `--show-toplevel` resolves
 /// symlinks (`/tmp` is `/private/tmp` on macOS) and would match no row, so
@@ -188,7 +201,7 @@ impl TreeStatus {
 pub fn status(dir: &Path) -> Result<TreeStatus, String> {
     let prefix = crate::git::git(dir, &["rev-parse", "--show-prefix"])?;
     let prefix = prefix.trim().trim_end_matches('/');
-    let dir_s = dir.to_string_lossy();
+    let dir_s = slashed(&dir.to_string_lossy()).into_owned();
     let dir_s = dir_s.trim_end_matches('/');
     let root = if prefix.is_empty() {
         dir_s
@@ -324,6 +337,17 @@ mod tests {
         assert_eq!(strength(Added), strength(Untracked));
         assert_eq!(strength(Added), strength(Renamed));
         assert_eq!(strength(TreeMark::Ignored), 0);
+    }
+
+    // A Windows tree asks with backslashes; git and `root` use slashes.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_with_backslashes_finds_its_mark() {
+        let s = parse("C:/repo", "?? new.txt\0 M src/a.rs\0");
+        assert_eq!(s.mark_for(r"C:\repo\new.txt", false), Some(File(Untracked)));
+        assert_eq!(s.mark_for(r"C:\repo\src\a.rs", false), Some(File(Modified)));
+        assert_eq!(s.mark_for(r"C:\repo\src", true), Some(Folder(Modified)));
+        assert_eq!(s.mark_for(r"C:\other\new.txt", false), None);
     }
 
     // Runs the real `git`, with the user's config shut out.
