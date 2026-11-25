@@ -237,7 +237,8 @@ if [ -n "$missing" ]; then
 fi
 if [ "$(uname -s)" = Linux ]; then
     say "Done. Start it from your applications menu, or with: infiniterm   (once ~/.local/bin is on your PATH)"
-    say "To update, run this installer again."
+    say "Updates install themselves: the app downloads a new release in the background and switches to it on restart."
+    say "A host running \`ift serve\` with no window is updated by running this installer again."
 else
     say "Done. Start it with: open -a infiniterm   (or \`ift\` once ~/.local/bin is on your PATH)"
 fi
