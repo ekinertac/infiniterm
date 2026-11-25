@@ -39,6 +39,9 @@ const SCRATCH: &str = ".update";
 
 /// The link to the folder in use, and the new link made beside it first.
 const CURRENT: &str = "current";
+// Only `repoint_current` makes the new link, and that is unix-only (a symlink);
+// without the cfg a Windows build warned "never used".
+#[cfg(unix)]
 const CURRENT_NEXT: &str = ".current.next";
 
 /// The folder the tarball unpacks to.
