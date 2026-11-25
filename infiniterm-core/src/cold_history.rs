@@ -18,7 +18,8 @@
 //! hyperlink, an underline colour and zero-width characters come along).
 //!
 //! Pure: no clock, no gpui. The owner decides when a terminal is quiet. Used
-//! by `infiniterm-term/src/grid.rs` (the card's own terminal). Constraints:
+//! by `infiniterm-term/src/grid.rs` (the card's own terminal) and
+//! `backend/mirror.rs` (the join relay's copy of it). Constraints:
 //! only for the primary screen (the alternate one has no history, and
 //! alacritty hides the primary while it is up), at display offset 0.
 
