@@ -278,8 +278,9 @@ impl AppView {
         self.fit_viewer_sizes()
     }
 
-    /// Someone typed into these cards in this window: the host takes their
-    /// size back from a viewer that holds it (#806), the hold permitting.
+    /// The person at this window typed, clicked or pasted in these cards:
+    /// the host takes their size back from a viewer that holds it, at once
+    /// (#805, `SizeClaims::local_input`).
     fn claim_sizes_for(&mut self, typed: &[String]) {
         if self.viewer_sizes.is_empty() || typed.is_empty() {
             return;
@@ -854,8 +855,9 @@ impl AppView {
         for (id, body) in self.bodies.iter_mut() {
             if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
                 let replies = std::mem::take(&mut t.replies);
+                let clicked = std::mem::take(&mut t.clicked);
                 if let Some(pane) = t.pane {
-                    if !t.outgoing.is_empty() {
+                    if clicked || !t.outgoing.is_empty() {
                         typed.push(id.clone());
                     }
                     per_pane.push((pane, std::mem::take(&mut t.outgoing), replies));
@@ -885,8 +887,9 @@ impl AppView {
         let mut typed: Vec<String> = vec![];
         for (id, body) in self.bodies.iter_mut() {
             if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
+                let clicked = std::mem::take(&mut t.clicked);
                 if let Some(pane) = t.pane {
-                    if !t.outgoing.is_empty() {
+                    if clicked || !t.outgoing.is_empty() {
                         typed.push(id.clone());
                     }
                     for bytes in std::mem::take(&mut t.outgoing) {

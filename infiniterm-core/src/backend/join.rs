@@ -49,7 +49,7 @@ use std::time::{Duration, Instant};
 
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
-use super::viewer_size::{clamp_size, parse_size, SizeChange, SizeEvent};
+use super::viewer_size::{clamp_size, counts_as_typing, parse_size, SizeChange, SizeEvent};
 #[cfg(windows)]
 use crate::pipe::{PipeListener, PipeStream};
 
@@ -71,10 +71,6 @@ pub const MAJOR: u32 = super::JOIN_MAJOR;
 /// The longest handshake line accepted: a topic is a word, a session id and
 /// a size.
 const MAX_LINE: u64 = 256;
-
-/// A sized viewer's keys are reported to the app at most this often: the app
-/// needs to know who typed last, not every key.
-const TYPED_EVERY: Duration = Duration::from_millis(250);
 
 /// How often a connection's writer checks that its reader is still there.
 /// A connection closes only when every copy of its socket is closed, and the
@@ -287,9 +283,9 @@ pub struct JoinHub {
     /// Restart notices queued and not yet written by a viewer's writer, so
     /// `announce_restart` knows when it may let the app quit.
     restart_unsent: Arc<AtomicUsize>,
-    /// What sized viewers do (#806), for the app that took it
-    /// (`take_sizes`). Until then a declared size is ignored, as on a host
-    /// that cannot apply it (`ift serve`), and nothing queues.
+    /// What sized viewers do (#805), for the app or `ift serve` that took it
+    /// (`take_sizes`). Until then a declared size is ignored and nothing
+    /// queues.
     sizes: Arc<Mutex<Option<Sender<SizeEvent>>>>,
     /// The number the next sized viewer is known by.
     next_viewer: Arc<AtomicU64>,
@@ -611,6 +607,10 @@ impl JoinHub {
         if let Some((cols, rows)) = size {
             report(SizeChange::Declared { cols, rows });
         }
+        // When this viewer joined and last reported typing: its first second
+        // is the emulator answering the replay, not a person, and a burst of
+        // keys is one report (`viewer_size::counts_as_typing`).
+        let joined = Instant::now();
         let mut typed_at: Option<Instant> = None;
         // After the replay is queued, so the redraw follows it.
         if let Some(nudge) = &self.nudge {
@@ -647,7 +647,11 @@ impl JoinHub {
             loop {
                 match frames.next() {
                     Ok(Some(Frame::Data(bytes))) => {
-                        if typed_at.is_none_or(|at| at.elapsed() >= TYPED_EVERY) {
+                        let ms = |d: Duration| d.as_millis().min(u64::MAX as u128) as u64;
+                        if counts_as_typing(
+                            ms(joined.elapsed()),
+                            typed_at.map(|at| ms(at.elapsed())),
+                        ) {
                             typed_at = Some(Instant::now());
                             report(SizeChange::Typed);
                         }
@@ -1241,12 +1245,23 @@ mod tests {
             next_size(&sizes),
             SizeChange::Declared { cols: 90, rows: 5 }
         );
+        // The first second's input (the phone answering the replay's
+        // queries) goes to the shell and claims nothing (#805).
+        s.write_all(&Frame::Data(b"\x1b[?1;2c".to_vec()).encode())
+            .unwrap();
+        assert!(
+            sizes.recv_timeout(Duration::from_millis(300)).is_err(),
+            "no claim inside the grace"
+        );
+        std::thread::sleep(Duration::from_millis(
+            super::super::viewer_size::JOIN_GRACE_MS,
+        ));
         s.write_all(&Frame::Data(b"a".to_vec()).encode()).unwrap();
         s.write_all(&Frame::Data(b"b".to_vec()).encode()).unwrap();
         assert_eq!(next_size(&sizes), SizeChange::Typed);
         drop(s);
         assert_eq!(next_size(&sizes), SizeChange::Left);
-        assert_eq!(written.lock().unwrap().len(), 2);
+        assert_eq!(written.lock().unwrap().len(), 3);
         assert!(sizes.try_recv().is_err(), "one Typed for the burst");
         let _ = std::fs::remove_file(&path);
     }

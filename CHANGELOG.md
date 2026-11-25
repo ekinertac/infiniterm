@@ -12,6 +12,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - The palette lists the hosts you have joined: "Join: connect to host…" shows every host `ift join` has reached, the last joined first, and joins the one you pick, as if you had typed `ift join` with the same options. "Join: forget host…" takes one off the list. Neither has a key; bind `join.connect` or `join.forget` in keybindings.json for one. A host joined before this version is listed by its folder name until you join it once more.
 - On Linux, an install made with install.sh now updates itself like the Mac: a new release is downloaded and checked in the background, and a restart (or "App: install the downloaded update and restart", or Update in the iPhone app) switches to it. Your shells keep running through it. A Homebrew install still tells you to run `brew upgrade`, and a host running `ift serve` with no window is updated by running install.sh there. Restarting the app on Linux works now too. `ift update status --method` also says how the install is updated (app, install.sh, brew or none).
+- A phone that opens a terminal card can size the shell to its own screen while you type on it, without changing the card on your canvas: the card shows the smaller grid inside its frame, with a thin line where it ends. A key, click or paste in the card on the Mac gives it its own size back at once, and so does the phone leaving. On a host running `ift serve`, the last phone to type keeps the size until it leaves. Needs an iPhone app update that uses it.
 
 ### 2026-11-24
 
