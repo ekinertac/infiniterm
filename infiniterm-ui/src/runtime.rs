@@ -100,6 +100,8 @@ impl AppView {
             join: None,
             last_agents: String::new(),
             join_updates: None,
+            join_sizes: None,
+            viewer_sizes: Default::default(),
             #[cfg(unix)]
             host_files: None,
             #[cfg(unix)]
@@ -1610,6 +1612,7 @@ fn start_join(app: &mut AppView) {
     match hub.serve(&infiniterm_core::paths::join_socket()) {
         Ok(()) => {
             app.join_updates = hub.take_updates();
+            app.join_sizes = Some(hub.take_sizes());
             #[cfg(unix)]
             {
                 app.join_opens = hub.take_opens();
