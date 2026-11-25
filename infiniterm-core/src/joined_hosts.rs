@@ -194,7 +194,9 @@ mod tests {
 
     /// How long a closed listener may take to stop answering in a test
     /// (40 x 50 ms = 2 s): the child of another test can hold it that long.
+    #[cfg(unix)]
     const SETTLE_TRIES: u32 = 40;
+    #[cfg(unix)]
     const SETTLE_MS: u64 = 50;
 
     fn scratch() -> PathBuf {

@@ -195,7 +195,9 @@ mod tests {
     }
 
     /// A release tarball as `tools/linux-dist.sh` lays it out, with this
-    /// VERSION, written to `<dir>/t.tar.gz`; returns its path.
+    /// VERSION, written to `<dir>/t.tar.gz`; returns its path. Only the unix
+    /// tests stage from it, so a Windows test build leaves it out.
+    #[cfg(unix)]
     fn tarball(dir: &Path, version: &str) -> PathBuf {
         let src = dir.join("src");
         let build = src.join(TARBALL_DIR);
@@ -236,6 +238,7 @@ mod tests {
         std::os::unix::fs::symlink(version, root.join(CURRENT)).unwrap();
     }
 
+    #[cfg(unix)]
     fn copy_from(src: PathBuf) -> impl FnOnce(&str, &Path) -> Result<(), String> {
         move |_url, dest| {
             std::fs::copy(&src, dest)
