@@ -6,6 +6,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+## 0.6.19 (build 1860), 2026-11-25
+
 ### 2026-11-25
 
 - Fixed: with a diff card open, a `git commit` or `git add` in that repository could fail now and then with "index.lock: File exists". The diff card's background check no longer locks the repository.
