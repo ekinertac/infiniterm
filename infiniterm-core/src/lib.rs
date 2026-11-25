@@ -69,6 +69,7 @@ pub mod browser_keys;
 pub mod card_header;
 pub mod card_label;
 pub mod cli;
+pub mod cold_history;
 pub mod commands;
 pub mod complete;
 pub mod config;

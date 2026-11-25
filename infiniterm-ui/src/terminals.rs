@@ -237,6 +237,20 @@ impl AppView {
         rejoined
     }
 
+    /// Between frames, hidden window or not: a terminal that has been quiet
+    /// gives up its history's rows (`Grid::rest`). One per poll, so the
+    /// cards that all went quiet together after a launch do not add their
+    /// few milliseconds up into one long tick.
+    pub fn idle_terminals(&mut self, now: f64) {
+        for body in self.bodies.values_mut() {
+            if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
+                if t.grid.rest(now) {
+                    return;
+                }
+            }
+        }
+    }
+
     /// The size a terminal card's grid is fitted to.
     fn grid_world(&self, card: &Card) -> Size {
         // A card in its own window fills that window (#356 spike), and

@@ -877,6 +877,7 @@ fn main() {
                         this.schedule_save(now_ms());
                         this.schedule_window_save(now_ms());
                         this.idle_editors(now_ms());
+                        this.idle_terminals(now_ms());
                         // The macOS open panel, asked for by "Open a file"
                         // (#64). Its answer arrives later, on its own task.
                         this.answer_reads(now_ms(), cx);
