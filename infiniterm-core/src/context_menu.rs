@@ -166,6 +166,13 @@ const CANVAS_SUB: Def = Def::Submenu {
         titled("canvas.zoom.fitAll", "Fit All Cards"),
         titled("canvas.zoom.actual", "Actual Size"),
         Def::Separator,
+        full(
+            "canvas.tidy.selection",
+            Some("Tidy Selection into a Block"),
+            "multiSelection",
+            "",
+            "",
+        ),
         titled("canvas.tidy", "Tidy into a Block"),
         titled("focus.selectAll", "Select All Cards"),
     ],

@@ -306,6 +306,63 @@ pub fn tidy_units(
         .collect()
 }
 
+/// How many lattice steps, in every direction, `tidy_units_clear` looks for
+/// a free place before it gives up and goes below everything. 20 steps of a
+/// 1725 px slot is 35,000 px, past any canvas a person arranges by hand.
+const CLEAR_RINGS: i64 = 20;
+
+/// `tidy_units` for a SELECTION (`canvas.tidy.selection`): the block starts
+/// where the selected cards' own top-left corner is, as `tidy_units` always
+/// does, but it must also keep clear of `fixed`, the cards (and group
+/// frames) that are not part of it. If the block does not fit where it
+/// starts, the whole block moves by whole steps of the lattice, so every
+/// column and row stays on a half-slot line: the nearest free place, right
+/// and down before left and up, and below everything when there is none.
+pub fn tidy_units_clear(
+    rects: &[Rect],
+    unit: &[usize],
+    pad: &[f64],
+    gutter: f64,
+    grid: (Point, Size),
+    fixed: &[Rect],
+) -> Vec<Rect> {
+    let base = tidy_units(rects, unit, pad, gutter, grid);
+    let (_, full) = grid;
+    let (sx, sy) = (full.w + gutter, full.h + gutter);
+    let shifted = |dx: f64, dy: f64| -> Vec<Rect> {
+        base.iter()
+            .map(|r| Rect {
+                x: r.x + dx,
+                y: r.y + dy,
+                ..*r
+            })
+            .collect()
+    };
+    let clear = |cards: &[Rect]| {
+        cards
+            .iter()
+            .all(|c| !fixed.iter().any(|&f| rects_overlap(*c, f)))
+    };
+    for ring in 0..=CLEAR_RINGS {
+        let mut offsets: Vec<(i64, i64)> = (-ring..=ring)
+            .flat_map(|i| (-ring..=ring).map(move |j| (i, j)))
+            .filter(|&(i, j)| i.abs().max(j.abs()) == ring)
+            .collect();
+        offsets.sort_by_key(|&(i, j)| (i.abs() + j.abs(), (i < 0) as u8 + (j < 0) as u8, j, i));
+        for (i, j) in offsets {
+            let cards = shifted(i as f64 * sx, j as f64 * sy);
+            if clear(&cards) {
+                return cards;
+            }
+        }
+    }
+    // Nothing free within reach: below every fixed card, on the lattice.
+    let below = fixed.iter().map(|f| f.y + f.h).fold(f64::MIN, f64::max) + gutter;
+    let top = base.iter().map(|r| r.y).fold(f64::MAX, f64::min);
+    let steps = ((below - top) / sy).ceil().max(0.);
+    shifted(0., steps * sy)
+}
+
 /// Where a new card goes on a canvas that has cards on it (`next_slot`):
 /// the lattice of `size` plus the gutter, still anchored at `anchor` (the
 /// canvas's half cell, so slots line up with cards placed before), laid
@@ -490,6 +547,47 @@ mod tests {
                 assert!(!rects_overlap(*a, *b));
             }
         }
+    }
+
+    // A selection's block starts where the selected cards are, as the whole
+    // workspace's does, and keeps clear of the cards that are not selected
+    // by moving whole lattice steps, so every column stays on a half-slot line.
+    #[test]
+    fn a_selection_tidies_where_it_is_when_nothing_is_in_the_way() {
+        let grid = (Point { x: 0., y: 0. }, Size { w: 300., h: 200. });
+        let rects = [r(1000., 1000., 300., 200.), r(5000., 4000., 300., 200.)];
+        let got = tidy_units_clear(&rects, &[0, 1], &[0., 0.], 25., grid, &[]);
+        assert_eq!(got, tidy_units(&rects, &[0, 1], &[0., 0.], 25., grid));
+        assert!(!rects_overlap(got[0], got[1]));
+    }
+
+    #[test]
+    fn a_selection_block_moves_a_lattice_step_off_a_card_that_is_in_the_way() {
+        let grid = (Point { x: 0., y: 0. }, Size { w: 300., h: 200. });
+        let rects = [r(1000., 1000., 300., 200.), r(5000., 4000., 300., 200.)];
+        let base = tidy_units(&rects, &[0, 1], &[0., 0.], 25., grid);
+        // A card that is not selected, exactly where the block would put one.
+        let got = tidy_units_clear(&rects, &[0, 1], &[0., 0.], 25., grid, &[base[1]]);
+        assert!(got.iter().all(|c| !rects_overlap(*c, base[1])));
+        let (dx, dy) = (got[0].x - base[0].x, got[0].y - base[0].y);
+        assert!((dx / 325.).fract().abs() < 1e-9, "whole steps across: {dx}");
+        assert!((dy / 225.).fract().abs() < 1e-9, "whole steps down: {dy}");
+        assert_ne!((dx, dy), (0., 0.), "it did move");
+        // The arrangement inside the block and the sizes are kept.
+        assert_eq!(got[1].x - got[0].x, base[1].x - base[0].x);
+        assert_eq!(got[1].y - got[0].y, base[1].y - base[0].y);
+        assert_eq!((got[0].w, got[0].h), (300., 200.));
+    }
+
+    #[test]
+    fn a_selection_with_no_free_place_goes_below_everything() {
+        let grid = (Point { x: 0., y: 0. }, Size { w: 300., h: 200. });
+        let rects = [r(1000., 1000., 300., 200.), r(5000., 4000., 300., 200.)];
+        // Covers every place the search reaches.
+        let wall = r(-100_000., -100_000., 200_000., 200_000.);
+        let got = tidy_units_clear(&rects, &[0, 1], &[0., 0.], 25., grid, &[wall]);
+        assert!(got.iter().all(|c| c.y >= 100_000. + 25. - 0.5), "{got:?}");
+        assert!(got.iter().all(|c| !rects_overlap(*c, wall)));
     }
 
     #[test]

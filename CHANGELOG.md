@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-25
+
+- New command "Canvas: tidy the selected cards into a block" (also "Tidy Selection into a Block" in the right-click menu of a multi-card selection). It packs only the selected cards, starting at the selection's own top-left corner, and leaves every other card where it is. If the block would land on a card that is not selected, it moves to the nearest free place. A group or split cluster moves as one only when all of it is selected. Cmd+Z puts the cards back. "Canvas: tidy the cards into a block" still tidies the whole workspace.
+
 ## 0.6.19 (build 1860), 2026-11-25
 
 ### 2026-11-25

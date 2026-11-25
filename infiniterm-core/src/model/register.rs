@@ -4007,6 +4007,122 @@ mod tests {
     // Four cards dragged all over the canvas come back as a 2x2 in the
     // order you read them, sizes kept, and Cmd+Z scatters them again.
     #[test]
+    fn tidy_selection_moves_only_the_selected_cards_and_undoes() {
+        let mut h = Harness::new();
+        for _ in 0..4 {
+            h.run("card.new.terminal");
+        }
+        let ids: Vec<String> = h.m.cards.iter().map(|c| c.id.clone()).collect();
+        let at = [
+            (9000., 9000.),
+            (30000., 2000.),
+            (2000., 30000.),
+            (20000., 20000.),
+            (40000., 40000.),
+        ];
+        for (id, (x, y)) in ids.iter().zip(at) {
+            let c = h.m.card_mut(id).unwrap();
+            c.rect.x = x;
+            c.rect.y = y;
+        }
+        // Three cards selected; the other two are not.
+        h.m.set_focus(Some(&ids[0]));
+        h.m.selection.extra = vec![ids[1].clone(), ids[2].clone()];
+        let before: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        h.run("canvas.tidy.selection");
+        let after: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        // The cards that were not selected did not move.
+        assert_eq!(after[3], before[3]);
+        assert_eq!(after[4], before[4]);
+        // The selected ones keep their sizes and now sit close together,
+        // the block starting by the selection's own top-left corner (the
+        // top-left of the three, 2000 across and 2000 down from it at most
+        // one lattice step away), not at the workspace's origin.
+        assert!(after[..3]
+            .iter()
+            .zip(&before[..3])
+            .all(|(a, b)| (a.w, a.h) == (b.w, b.h)));
+        let (left, top) = (
+            after[..3].iter().map(|r| r.x).fold(f64::MAX, f64::min),
+            after[..3].iter().map(|r| r.y).fold(f64::MAX, f64::min),
+        );
+        let step = after[0].w + crate::cards::GUTTER;
+        assert!((left - 2000.).abs() <= step, "left {left}");
+        assert!(
+            (top - 2000.).abs() <= after[0].h + crate::cards::GUTTER,
+            "top {top}"
+        );
+        assert!(none_overlap(&h));
+        h.run("layout.undo");
+        let back: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(back, before);
+    }
+
+    // A card that is not selected sits where the block would go: the block
+    // keeps clear of it, and it stays where it was.
+    #[test]
+    fn tidy_selection_keeps_clear_of_a_card_that_is_not_selected() {
+        let mut h = Harness::new();
+        for _ in 0..2 {
+            h.run("card.new.terminal");
+        }
+        let ids: Vec<String> = h.m.cards.iter().map(|c| c.id.clone()).collect();
+        for (id, (x, y)) in ids
+            .iter()
+            .zip([(9000., 9000.), (30000., 22000.), (11000., 9000.)])
+        {
+            let c = h.m.card_mut(id).unwrap();
+            c.rect.x = x;
+            c.rect.y = y;
+        }
+        let w = rect_of(&h, &ids[0]).w;
+        // Right where the second selected card would go: beside the first.
+        h.m.card_mut(&ids[2]).unwrap().rect.x = 9000. + w + crate::cards::GUTTER;
+        let blocker = rect_of(&h, &ids[2]);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.selection.extra = vec![ids[1].clone()];
+        h.run("canvas.tidy.selection");
+        assert_eq!(rect_of(&h, &ids[2]), blocker, "it did not move");
+        assert!(none_overlap(&h), "and nothing lands on it");
+    }
+
+    #[test]
+    fn tidy_selection_needs_two_cards() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        let before: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        h.run("canvas.tidy.selection");
+        let after: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        assert_eq!(after, before);
+        assert!(h.m.notice.is_some(), "and it says why");
+    }
+
+    // Only one of a group's two cards is selected: it is tidied as a loose
+    // card and the other member stays where it is.
+    #[test]
+    fn tidy_selection_treats_a_part_of_a_group_as_loose_cards() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.m.focus_extended(&b, vec![a.clone()]);
+        h.run("group.new");
+        let (pending, text) = h.m.prompt.settle(Some("api")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        h.m.card_mut(&c).unwrap().rect.x = 40000.;
+        h.m.card_mut(&c).unwrap().rect.y = 40000.;
+        let b_before = rect_of(&h, &b);
+        // `a` (in the group) and `c` (loose) selected; `b` is not.
+        h.m.set_focus(Some(&a));
+        h.m.selection.extra = vec![c.clone()];
+        h.run("canvas.tidy.selection");
+        assert_eq!(rect_of(&h, &b), b_before, "the other group member stayed");
+        assert!(none_overlap(&h));
+    }
+
+    #[test]
     fn tidy_puts_scattered_cards_back_into_the_block() {
         let mut h = Harness::new();
         for _ in 0..3 {

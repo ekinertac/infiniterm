@@ -350,6 +350,98 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.apply_viewport(next);
         }
     });
+    // The same packing for the SELECTED cards only (#898): the block starts at
+    // the selection's own top-left corner and keeps clear of every card that
+    // is not selected (`layout::tidy_units_clear`); the rest of the workspace
+    // does not move. A group or a split cluster moves as a unit only when all
+    // of it is selected; a part of one is tidied as loose cards.
+    r.register(
+        "canvas.tidy.selection",
+        "Canvas: tidy the selected cards into a block",
+        |m| {
+            let sel: Vec<crate::model::Card> = m.selected().into_iter().cloned().collect();
+            if sel.len() < 2 {
+                m.notify("select two or more cards to tidy");
+                return;
+            }
+            let here: Vec<crate::model::Card> = m.here().into_iter().cloned().collect();
+            let is_selected = |c: &crate::model::Card| sel.iter().any(|s| s.id == c.id);
+            let whole = |same: &dyn Fn(&crate::model::Card) -> bool| {
+                here.iter().filter(|c| same(c)).all(is_selected)
+            };
+            let mut keys: Vec<String> = vec![];
+            let mut pad: Vec<f64> = vec![];
+            let unit: Vec<usize> = sel
+                .iter()
+                .map(|c| {
+                    let (key, p) = match (&c.group_id, &c.soft_group_id) {
+                        (Some(g), _) if whole(&|o| o.group_id.as_ref() == Some(g)) => {
+                            (format!("g:{g}"), m.group_pad())
+                        }
+                        (None, Some(s)) if whole(&|o| o.soft_group_id.as_ref() == Some(s)) => {
+                            (format!("s:{s}"), 0.)
+                        }
+                        _ => (format!("c:{}", c.id), 0.),
+                    };
+                    match keys.iter().position(|k| *k == key) {
+                        Some(u) => u,
+                        None => {
+                            keys.push(key);
+                            pad.push(p);
+                            keys.len() - 1
+                        }
+                    }
+                })
+                .collect();
+            // What the block must keep clear of: the cards that are not
+            // selected, and the frames of groups none of whose cards are.
+            let mut fixed: Vec<crate::grid::Rect> = here
+                .iter()
+                .filter(|c| !is_selected(c))
+                .map(|c| c.rect)
+                .collect();
+            if let Some(ws) = m.active_workspace.clone() {
+                for g in &m.groups {
+                    if sel
+                        .iter()
+                        .any(|c| c.group_id.as_deref() == Some(g.id.as_str()))
+                    {
+                        continue;
+                    }
+                    if let Some(frame) = m.group_frame(&g.id, &ws) {
+                        fixed.push(frame);
+                    }
+                }
+            }
+            let rects: Vec<_> = sel.iter().map(|c| c.rect).collect();
+            let grid = (
+                Point {
+                    x: crate::grid::HALF_CELL,
+                    y: crate::grid::HALF_CELL,
+                },
+                m.default_size(),
+            );
+            let placed =
+                crate::layout::tidy_units_clear(&rects, &unit, &pad, m.gap(), grid, &fixed);
+            if placed == rects {
+                m.notify("already tidy");
+                return;
+            }
+            m.remember_layout();
+            let ids: Vec<String> = sel.iter().map(|c| c.id.clone()).collect();
+            m.mark_swap(&ids);
+            for (c, rect) in sel.iter().zip(&placed) {
+                if let Some(card) = m.card_mut(&c.id) {
+                    card.rect = *rect;
+                }
+            }
+            m.dirty_layout = true;
+            if let Some(bounds) = bounding_rect(&placed) {
+                let next = m.fit_viewport(bounds);
+                m.apply_viewport(next);
+            }
+        },
+    );
     // Toggle: the key that opened it is the obvious one to press to dismiss it.
     r.register("app.palette", "Run a command…", |m| {
         if m.palette_open() {
