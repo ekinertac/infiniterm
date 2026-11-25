@@ -80,6 +80,9 @@ const LINK_UNDERLINE_OFFSET_PX: f32 = 1.5;
 /// Dim text (SGR faint) is drawn at this alpha rather than a different
 /// weight, since the grid has no font-weight axis for dimness.
 const TERM_DIM_ALPHA: f32 = 0.6;
+/// The line where a grid smaller than its card ends (#805): faint enough to
+/// read as an edge, not a border, against any terminal theme.
+const GRID_EDGE_ALPHA: f32 = 0.25;
 /// A single wheel tick never sends more than this many scrolled lines to a
 /// mouse-aware program or the alternate screen: a fast trackpad fling must
 /// not flood it.
@@ -116,6 +119,11 @@ pub struct TerminalBody {
     pub readopt_due: f64,
     /// Bytes to write to the pty: the ui drains them after each event.
     pub outgoing: Vec<Vec<u8>>,
+    /// The person at this window clicked in the card since the last drain
+    /// (#805): with a key or a paste (`outgoing`), it takes the pty's size
+    /// back from a phone that holds it. A click sends nothing when the
+    /// program asked for no mouse reports, hence a flag of its own.
+    pub clicked: bool,
     /// What the EMULATOR answered a program with: a colour query, device
     /// attributes, a cursor report. Kept apart from `outgoing`, which is
     /// what the person typed, because under tmux these must not be sent at
@@ -343,6 +351,7 @@ impl TerminalBody {
             waiting_note: false,
             readopt_due: 0.,
             outgoing: vec![],
+            clicked: false,
             replies: vec![],
             dirty: true,
             wheel_carry: crate::chrome::WheelCarry::default(),
@@ -723,6 +732,39 @@ impl TerminalBody {
 impl TerminalBody {
     /// The reference's `.scrim`: the card's ground over the text at the
     /// dim amount, so an unfocused card reads as further away.
+    /// The right and bottom edges of a grid `grid_w` by `grid_h` drawn from
+    /// `origin`, each only when the card has room past it: a hairline in the
+    /// text colour, faint, so it reads as where the grid ends and not as a
+    /// border.
+    fn paint_grid_edge(
+        &self,
+        bounds: Bounds<Pixels>,
+        origin: gpui::Point<Pixels>,
+        grid_w: Pixels,
+        grid_h: Pixels,
+        window: &mut Window,
+    ) {
+        let color = crate::chrome::with_alpha(rgb(self.palette.foreground), GRID_EDGE_ALPHA);
+        let line = px(crate::chrome::HAIRLINE_PX as f32);
+        let right = origin.x + grid_w;
+        let bottom = origin.y + grid_h;
+        let inside = |end: Pixels, limit: Pixels| end + line < limit;
+        let room_right = inside(right, bounds.origin.x + bounds.size.width);
+        let room_below = inside(bottom, bounds.origin.y + bounds.size.height);
+        if room_right {
+            window.paint_quad(fill(
+                Bounds::new(point(right, origin.y), size(line, grid_h)),
+                color,
+            ));
+        }
+        if room_below {
+            window.paint_quad(fill(
+                Bounds::new(point(origin.x, bottom), size(grid_w, line)),
+                color,
+            ));
+        }
+    }
+
     fn paint_scrim(&self, bounds: Bounds<Pixels>, focused: bool, window: &mut Window, cx: &App) {
         if focused || self.inactive_dim <= 0. {
             return;
@@ -1153,6 +1195,18 @@ impl CardBody for TerminalBody {
         let cell_w = px((self.cell_w * scale) as f32);
         let pad = px((self.pad * scale) as f32);
         let origin = point(bounds.origin.x + pad, bounds.origin.y + pad);
+        // A grid at another size than the card (a phone holds the pty's
+        // size, #805, or a viewer draws the host's grid): a thin line where
+        // it ends, on the plain background, and no banner (Ekin).
+        if let Some((cols, rows)) = self.fixed_cells {
+            self.paint_grid_edge(
+                bounds,
+                origin,
+                cell_w * cols as f32,
+                line_h * rows as f32,
+                window,
+            );
+        }
         let mut base = term_font(&self.font_family);
         base.weight = self.weight;
         let bold_weight = self.bold_weight;
@@ -1532,6 +1586,7 @@ impl CardBody for TerminalBody {
         if self.error.is_some() {
             return BodyAction::Retry;
         }
+        self.clicked = true;
         let (col, row) = self.cell_at(local);
         let b = match button {
             gpui::MouseButton::Left => MouseButton::Left,

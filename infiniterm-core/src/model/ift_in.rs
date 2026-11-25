@@ -598,6 +598,11 @@ impl Model {
             }
             // `ift update status`: the updater's last word, so a caller of
             // `app.update.check` knows when `app.update.install` can run.
+            // `--method` (#840) adds how this install updates, after a TAB;
+            // never without it, since shipped phones count the fields.
+            "update-status" if req.args.iter().any(|a| a == "--method") => ok(self
+                .update_state
+                .status_line_with_method(self.update_method)),
             "update-status" => ok(self.update_state.status_line()),
             "dev-run" => {
                 if !self.dev_build {
@@ -694,6 +699,19 @@ mod tests {
         let reply = ask(&mut m);
         assert!(reply.ok);
         assert_eq!(reply.text, "ready\t0.6.9\t1105");
+        // #840: the method only when asked for.
+        m.update_method = crate::update::METHOD_SCRIPT;
+        assert_eq!(ask(&mut m).text, "ready\t0.6.9\t1105");
+        let with = m.run_ift(
+            &CliRequest {
+                id: 2,
+                cmd: "update-status".into(),
+                args: vec!["--method".into()],
+                card_id: None,
+            },
+            &[],
+        );
+        assert_eq!(with.text, "ready\t0.6.9\t1105\tinstall.sh");
     }
 
     #[test]

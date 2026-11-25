@@ -21,13 +21,24 @@ pub fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// The topic the host's handshake line names: `canvas` or `session <id>`.
+/// The topic the host's handshake line names: `canvas` or `session <id>`,
+/// and for a viewer that sizes the pty to its own screen (#806),
+/// `session <id> <cols>x<rows>`, clamped as the host will clamp it.
 pub fn parse_join(args: &[String]) -> Result<String, String> {
+    use infiniterm_core::backend::viewer_size::parse_size;
     match args {
         [t] if t == "canvas" => Ok("canvas".into()),
         [t, id] if t == "session" && valid_id(id) => Ok(format!("session {id}")),
-        [t, id] if t == "session" => Err(format!("{id:?} is not a session id")),
-        _ => Err("usage: ift proxy join canvas | session <id>".into()),
+        [t, id, flag, size] if t == "session" && valid_id(id) && flag == "--size" => {
+            match parse_size(size) {
+                Some((cols, rows)) => Ok(format!("session {id} {cols}x{rows}")),
+                None => Err(format!("{size:?} is not a size; give <columns>x<rows>")),
+            }
+        }
+        [t, id, ..] if t == "session" && !valid_id(id) => {
+            Err(format!("{id:?} is not a session id"))
+        }
+        _ => Err("usage: ift proxy join canvas | session <id> [--size <cols>x<rows>]".into()),
     }
 }
 
@@ -78,6 +89,24 @@ mod tests {
         assert!(parse_join(&a(&["session"])).is_err());
         assert!(parse_join(&a(&["session", "../x"])).is_err());
         assert!(parse_join(&a(&["canvas", "extra"])).is_err());
+    }
+
+    #[test]
+    fn a_session_can_carry_the_viewers_size() {
+        assert_eq!(
+            parse_join(&a(&["session", "abc-1", "--size", "40x30"])).unwrap(),
+            "session abc-1 40x30"
+        );
+        assert_eq!(
+            parse_join(&a(&["session", "abc-1", "--size", "1x1"])).unwrap(),
+            "session abc-1 20x5",
+            "clamped"
+        );
+        assert!(parse_join(&a(&["session", "abc-1", "--size", "40"])).is_err());
+        assert!(parse_join(&a(&["session", "abc-1", "--size"])).is_err());
+        assert!(parse_join(&a(&["session", "abc-1", "40x30"])).is_err());
+        assert!(parse_join(&a(&["session", "../x", "--size", "40x30"])).is_err());
+        assert!(parse_join(&a(&["canvas", "--size", "40x30"])).is_err());
     }
 
     #[test]

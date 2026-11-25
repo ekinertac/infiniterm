@@ -361,6 +361,13 @@ pub struct AppView {
     /// The edits viewers send up (host side, #423): applied in the poll.
     pub join_updates:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// What viewers that declared their own size did (host side, #806).
+    pub join_sizes:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::viewer_size::SizeEvent>>,
+    /// Who holds each session's size while a sized viewer is connected, by
+    /// session id (`terminals.rs`, `apply_viewer_sizes`).
+    pub viewer_sizes:
+        std::collections::HashMap<String, infiniterm_core::backend::viewer_size::SizeClaims>,
     /// A viewer's clicks on paths, already found on this disk (host side,
     /// #555): opened beside the card they came from, in the poll.
     #[cfg(unix)]
@@ -384,6 +391,12 @@ pub struct AppView {
     pub host_drops: (
         std::sync::mpsc::Sender<crate::runtime::HostDrop>,
         std::sync::mpsc::Receiver<crate::runtime::HostDrop>,
+    ),
+    /// What each `ift join` run from the palette said last (#891): the run
+    /// waits on ssh on a thread and answers here; the poll shows it.
+    pub join_results: (
+        std::sync::mpsc::Sender<String>,
+        std::sync::mpsc::Receiver<String>,
     ),
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
@@ -848,7 +861,13 @@ fn main() {
                         // What viewers changed on this canvas (#423).
                         // Files a joined window sent to the host (#556).
                         this.drain_host_drops();
-                        if this.apply_remote_opens() | this.apply_remote_updates() {
+                        // Palette joins that ended (#891); sizes viewers
+                        // claimed (#805).
+                        if this.apply_remote_opens()
+                            | this.apply_remote_updates()
+                            | this.drain_join_results()
+                            | this.apply_viewer_sizes()
+                        {
                             this.redraw = true;
                             cx.notify();
                         }
