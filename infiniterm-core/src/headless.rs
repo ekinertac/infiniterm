@@ -160,6 +160,11 @@ pub struct Host {
     /// The size each card's shell was last given, so a card resized in a
     /// viewer (a move on the canvas) refits its pty.
     sized: std::collections::HashMap<String, (u16, u16)>,
+    /// What viewers that declared their own size did (#805), and who holds
+    /// each session's size. With no person at this host, the latest viewer
+    /// to type keeps it until it leaves; then the card's own size again.
+    join_sizes: Receiver<crate::backend::viewer_size::SizeEvent>,
+    viewer_sizes: std::collections::HashMap<String, crate::backend::viewer_size::SizeClaims>,
 }
 
 impl Host {
@@ -230,6 +235,7 @@ impl Host {
             .map_err(|e| format!("could not serve {}: {e}", io.join_socket.display()))?;
         let updates = hub.take_updates();
         let opens = hub.take_opens();
+        let join_sizes = hub.take_sizes();
 
         let mut host = Host {
             model,
@@ -244,6 +250,8 @@ impl Host {
             last_agents: String::new(),
             last_sweep: 0.,
             sized: Default::default(),
+            join_sizes,
+            viewer_sizes: Default::default(),
         };
         // Viewers that join before the first change still get a canvas.
         host.write_layout();
@@ -261,6 +269,7 @@ impl Host {
         self.drain_cli();
         self.model.tick(now);
         self.perform_effects();
+        self.drain_sizes(now);
         self.reconcile_terminals();
         if self.apply_remote_updates() | self.apply_remote_opens() {
             self.perform_effects();
@@ -272,6 +281,28 @@ impl Host {
             self.last_sweep = now;
             self.model.sweep_stale();
         }
+    }
+
+    /// What sized viewers did since the last turn (#805). No local input
+    /// exists here, so nothing takes a size back but the viewer leaving.
+    fn drain_sizes(&mut self, now: f64) {
+        for e in self.join_sizes.try_iter().collect::<Vec<_>>() {
+            let claims = self.viewer_sizes.entry(e.session.clone()).or_default();
+            claims.apply(e.viewer, e.change, now as u64);
+            if claims.is_empty() {
+                self.viewer_sizes.remove(&e.session);
+            }
+        }
+    }
+
+    /// The size a card's shell should have: the viewer's that holds its
+    /// session, else the card's own.
+    fn wanted_cells(&self, card: &crate::model::Card) -> (u16, u16) {
+        card.session
+            .as_ref()
+            .and_then(|s| self.viewer_sizes.get(s))
+            .and_then(crate::backend::viewer_size::SizeClaims::size)
+            .unwrap_or_else(|| nominal_cells(card.rect.w, card.rect.h, &self.model.config.terminal))
     }
 
     /// Saves now (a stop, a quit): anything in the last half second would
@@ -406,7 +437,7 @@ impl Host {
             .cloned()
             .collect();
         for card in cards {
-            let (cols, rows) = nominal_cells(card.rect.w, card.rect.h, &self.model.config.terminal);
+            let (cols, rows) = self.wanted_cells(&card);
             if card.pane_id.is_none() {
                 let adopted = card
                     .session

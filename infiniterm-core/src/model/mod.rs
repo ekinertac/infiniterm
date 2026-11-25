@@ -328,6 +328,15 @@ pub enum Effect {
     /// Delete the saved workspace of this name (#796), asked first
     /// (`Pending::DeleteSavedWorkspace`).
     DeleteSavedWorkspaceFile(String),
+    /// Re-list the hosts this Mac has joined into `Model::joined_hosts`
+    /// (#891, `joined_hosts.rs`); before their picker opens.
+    RefreshJoinedHosts,
+    /// Run `ift join` with these arguments (a `JoinRecord::args`): a host
+    /// picked from "Join: connect to host…".
+    JoinHost(Vec<String>),
+    /// Remove the viewer folder of this name (#891), asked first
+    /// (`Pending::ForgetJoinedHost`).
+    ForgetJoinedHost(String),
     /// "Git: switch branch…" (#750): list the branches of the repository
     /// `dir` is in and hand them to `Model::open_branches`, or git's error
     /// to `Model::notify`.
@@ -764,6 +773,8 @@ pub enum Pending {
     /// `workspace.deleteSaved` (#796): yes deletes the saved workspace of
     /// this name.
     DeleteSavedWorkspace(String),
+    /// `join.forget` (#891): yes removes this viewer folder.
+    ForgetJoinedHost(String),
     CloseWorkspace(String),
     /// A browser card's page sent the card to another app's link (#668): yes
     /// hands it to macOS.
@@ -1157,6 +1168,9 @@ pub struct Model {
     /// The saved workspaces' names (#715), read by the ui when their picker
     /// opens (`Effect::RefreshSavedWorkspaces`).
     pub saved_workspace_names: Vec<String>,
+    /// The hosts this Mac has joined (#891), read by the ui when their
+    /// picker opens (`Effect::RefreshJoinedHosts`).
+    pub joined_hosts: Vec<crate::joined_hosts::JoinedHost>,
     /// The symbols Go to Symbol lists while its palette is up.
     pub symbols: Option<SymbolsState>,
     /// The files Go to File (Cmd+P) lists, read by the ui when it opens
@@ -1194,6 +1208,9 @@ pub struct Model {
     pub dev_build: bool,
     /// What the updater last said, set by the ui; `ift update status` reads it.
     pub update_state: crate::update::UpdateState,
+    /// How this install is updated (`update::METHOD_*`), set by the ui with
+    /// the updater; `ift update status --method` adds it (#840).
+    pub update_method: &'static str,
     /// Config pairs that are open: both ids and the card to return to.
     pub config_pairs: Vec<ConfigPair>,
     /// The last few cards closed, newest last, so a close can be undone.
@@ -1395,6 +1412,7 @@ impl Model {
             theme_names: vec![],
             snippets: vec![],
             saved_workspace_names: vec![],
+            joined_hosts: vec![],
             symbols: None,
             quick_open: None,
             branches: None,
@@ -1412,6 +1430,7 @@ impl Model {
             home: String::new(),
             dev_build: cfg!(debug_assertions),
             update_state: crate::update::UpdateState::Off,
+            update_method: crate::update::METHOD_NONE,
             config_pairs: vec![],
             closed: vec![],
             parked: vec![],

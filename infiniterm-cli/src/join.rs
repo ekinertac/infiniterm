@@ -30,14 +30,9 @@ use infiniterm_core::paths;
 
 use crate::connect::{ensure_config, folder_name, parse, socket_fits, Parsed};
 
-/// Where viewers keep their folders: beside the remote instances', under the
-/// scratch data directory when `INFINITERM_DATA_DIR` is set.
-pub fn joins_root(data_override: Option<&Path>, home: &Path) -> PathBuf {
-    match data_override {
-        Some(dir) => dir.join("joins"),
-        None => home.join(".infiniterm").join("joins"),
-    }
-}
+/// Where viewers keep their folders; the palette's list of joined hosts
+/// (#891) reads the same place, so the rule lives in core.
+pub use infiniterm_core::joined_hosts::joins_root;
 
 /// The environment that puts the app in viewer mode for this host. The name
 /// and colour are read by the same code a remote instance's are.
@@ -130,6 +125,16 @@ pub fn run(args: &[String]) -> ExitCode {
         eprintln!("ift: join installs nothing; `ift connect {} --install` puts ift on a server", p.host);
         return ExitCode::from(2);
     }
+    // How the host was asked for, before the login step adds a ControlPath
+    // and the check a found `ift` path: the palette joins again with these
+    // (#891).
+    let mut joined = infiniterm_core::joined_hosts::JoinRecord {
+        host: p.host.clone(),
+        name: p.name.clone(),
+        ssh: p.ssh_args.clone(),
+        ift: p.ift.clone(),
+        joined: 0,
+    };
     let mut host: RemoteHost = remote::from_vars(
         Some(&p.host),
         p.ssh_args.as_deref(),
@@ -249,6 +254,14 @@ pub fn run(args: &[String]) -> ExitCode {
     if let Err(e) = std::fs::create_dir_all(&data) {
         eprintln!("ift: {}: {e}", data.display());
         return ExitCode::from(1);
+    }
+    // The host passed its check: it goes on the palette's list (#891). A
+    // failed write costs only that row, never the join.
+    joined.joined = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if let Err(e) = infiniterm_core::joined_hosts::record(&data, &joined) {
+        eprintln!("ift: could not note {} as joined: {e}", p.host);
     }
     // A live app already holds this folder's socket: opening a second one
     // would exit on the lock and show nothing. Say so, and bring it forward.

@@ -6,6 +6,14 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-25
+
+- Fixed: with a diff card open, a `git commit` or `git add` in that repository could fail now and then with "index.lock: File exists". The diff card's background check no longer locks the repository.
+
+- The palette lists the hosts you have joined: "Join: connect to host…" shows every host `ift join` has reached, the last joined first, and joins the one you pick, as if you had typed `ift join` with the same options. "Join: forget host…" takes one off the list. Neither has a key; bind `join.connect` or `join.forget` in keybindings.json for one. A host joined before this version is listed by its folder name until you join it once more.
+- On Linux, an install made with install.sh now updates itself like the Mac: a new release is downloaded and checked in the background, and a restart (or "App: install the downloaded update and restart", or Update in the iPhone app) switches to it. Your shells keep running through it. A Homebrew install still tells you to run `brew upgrade`, and a host running `ift serve` with no window is updated by running install.sh there. Restarting the app on Linux works now too. `ift update status --method` also says how the install is updated (app, install.sh, brew or none).
+- A phone that opens a terminal card can size the shell to its own screen while you type on it, without changing the card on your canvas: the card shows the smaller grid inside its frame, with a thin line where it ends. A key, click or paste in the card on the Mac gives it its own size back at once, and so does the phone leaving. On a host running `ift serve`, the last phone to type keeps the size until it leaves. Needs an iPhone app update that uses it.
+
 ### 2026-11-24
 
 - The app uses much less memory when most of your terminals are quiet. A terminal that has printed nothing for 30 seconds keeps its scrollback in a compact form and gets it back, unchanged, as soon as it prints, or you scroll, search or select in it. The copy the app keeps of every terminal for windows that may join does the same. With 27 terminals of 4,000 lines each, memory went from about 990 MB to 260 MB. The scrollback length is the same as before.
