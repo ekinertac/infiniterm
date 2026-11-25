@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://infiniterm.app/sitemap-index.xml
