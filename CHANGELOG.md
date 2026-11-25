@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-25
 
 - New command "Canvas: tidy the selected cards into a block" (also "Tidy Selection into a Block" in the right-click menu of a multi-card selection). It packs only the selected cards, starting at the selection's own top-left corner, and leaves every other card where it is. If the block would land on a card that is not selected, it moves to the nearest free place. A group or split cluster moves as one only when all of it is selected. Cmd+Z puts the cards back. "Canvas: tidy the cards into a block" still tidies the whole workspace.
+- The Linux installer's closing message no longer tells you to run it again to update: it says the app updates itself, and that only a host running `ift serve` with no window needs the installer again.
 
 ## 0.6.19 (build 1860), 2026-11-25
 
