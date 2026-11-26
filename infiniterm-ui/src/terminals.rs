@@ -783,6 +783,21 @@ impl AppView {
         self.redraw = true;
     }
 
+    /// Feeds one budget of output from the poll when the window has stopped
+    /// drawing (minimised, on another Space, behind others: #442). Acks are
+    /// sent only by `feed_terminals`, which otherwise runs in the frame, so
+    /// a window that draws nothing stopped acking: `iftd`'s reader blocked
+    /// at 256 KiB unacked, stopped publishing to the relay, and a joined
+    /// phone's terminal and its rejoin snapshot froze until the window came
+    /// back (#901). One budget per tick keeps the credit flowing without a
+    /// flood holding the timer. The parsed bodies are dirty after this, so
+    /// a window that is visible after all draws them on its next frame.
+    pub fn feed_between_frames(&mut self, now: f64, cx: &mut gpui::App) {
+        if feed_without_frames(now, self.last_paint_ms, self.scheduler.pending()) {
+            self.feed_terminals(now, cx);
+        }
+    }
+
     /// Answers the `ift read` requests waiting. The grid only holds what
     /// `feed_terminals` has parsed, and that runs inside a frame, so a window
     /// that is not drawing (hidden, behind others, on another Space) leaves
@@ -986,6 +1001,18 @@ fn gated_writes(answer: bool, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> 
 /// quiet card needs one, and the cap keeps a flood from holding the timer.
 const READ_FEED_PASSES: usize = 64;
 
+/// How long the window may go without painting, with output waiting, before
+/// the poll parses it instead (`feed_between_frames`). Twice
+/// `chrome::FAR_REFRESH_MS`, so a crowded canvas whose content frames are
+/// rationed to one every 250 ms keeps its ration and is not fed behind it.
+const STALLED_PAINT_MS: f64 = 2. * crate::chrome::FAR_REFRESH_MS;
+
+/// Whether the poll should parse output itself: some is waiting and the
+/// window has not painted for `STALLED_PAINT_MS`, so no frame will.
+fn feed_without_frames(now: f64, last_paint_ms: f64, pending: bool) -> bool {
+    pending && now - last_paint_ms >= STALLED_PAINT_MS
+}
+
 /// An `ift read` waiting for its card's output to be parsed (see `answer_reads`).
 pub struct ReadRequest {
     pub request_id: u64,
@@ -999,6 +1026,19 @@ pub struct ReadRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A minimised window draws no frames, so the poll must parse and ack or
+    // iftd's reader stalls and a joined phone freezes (#901). A crowded
+    // canvas painting once every FAR_REFRESH_MS is still drawing.
+    #[test]
+    fn the_poll_feeds_only_when_output_waits_and_the_window_stopped_painting() {
+        let far = crate::chrome::FAR_REFRESH_MS;
+        assert!(feed_without_frames(10_000., 0., true));
+        assert!(feed_without_frames(1_000. + STALLED_PAINT_MS, 1_000., true));
+        assert!(!feed_without_frames(10_000., 0., false));
+        assert!(!feed_without_frames(1_000. + far, 1_000., true));
+        assert!(!feed_without_frames(1_016., 1_000., true));
+    }
 
     // Cmd+Shift+Enter fills the window with the card, and the grid has to
     // follow or the shell keeps the columns it had on the canvas.

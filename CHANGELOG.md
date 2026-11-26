@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-26
+
+- A phone or other `ift join` window no longer freezes on a card while the Mac window is minimised, on another Space or covered by other windows. Before, the card's terminal stopped updating there (and in the snapshot a rejoin received) until the Mac window came back, though its state colour still changed.
+
 ### 2026-11-25
 
 - New command "Canvas: tidy the selected cards into a block" (also "Tidy Selection into a Block" in the right-click menu of a multi-card selection). It packs only the selected cards, starting at the selection's own top-left corner, and leaves every other card where it is. If the block would land on a card that is not selected, it moves to the nearest free place. A group or split cluster moves as one only when all of it is selected. Cmd+Z puts the cards back. "Canvas: tidy the cards into a block" still tidies the whole workspace.
